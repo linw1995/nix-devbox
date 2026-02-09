@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Nix
+result
+result-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# uv
+uv.lock
+.pdm-python
+
+# cache
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+.pdm-build/
+.direnv/
+.dream2nix/
+.agents/

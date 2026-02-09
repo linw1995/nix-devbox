@@ -1,0 +1,22 @@
+[project]
+name = "nix-devbox"
+version = "0.1.0"
+description = "Merge multiple flake devShells, build Docker image, and run containers"
+authors = [{ name = "林玮 (Jade Lin)", email = "linw1995@icloud.com" }]
+dependencies = ["click>=8.0.0", "pyyaml>=6.0"]
+requires-python = ">=3.14"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.scripts]
+nix-devbox = "nix_devbox.cli:cli"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nix_devbox"]
+
+[tool.pdm]
+distribution = true

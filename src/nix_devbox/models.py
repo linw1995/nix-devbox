@@ -1,0 +1,86 @@
+"""Domain models for nix-devbox."""
+
+from dataclasses import dataclass
+from pathlib import Path
+
+DEFAULT_TAG = "latest"
+
+# Flake shell attribute patterns
+DEFAULT_SHELL_ATTR = "devShells.${system}.default"
+DEVSHELLS_PREFIX = "devShells."
+
+
+@dataclass(frozen=True)
+class ImageRef:
+    """Docker image reference with name and tag."""
+
+    name: str
+    tag: str
+
+    def __str__(self) -> str:
+        return f"{self.name}:{self.tag}"
+
+    @classmethod
+    def parse(
+        cls,
+        value: str,
+        *,
+        name_override: str | None = None,
+        tag_override: str | None = None,
+    ) -> "ImageRef":
+        """Parse image reference from string like 'name:tag' or 'name'."""
+        if ":" in value:
+            name, tag = value.split(":", 1)
+        else:
+            name, tag = value, DEFAULT_TAG
+
+        return cls(
+            name=name_override or name,
+            tag=tag_override or tag,
+        )
+
+
+@dataclass(frozen=True)
+class FlakeRef:
+    """Flake reference with path and shell attribute."""
+
+    path: str
+    shell: str
+
+    @classmethod
+    def parse(cls, ref: str) -> "FlakeRef":
+        """
+        Parse flake reference.
+
+        Formats:
+            /path/to/flake              -> (path, devShells.${system}.default)
+            /path/to/flake#shellname    -> (path, devShells.${system}.shellname)
+            /path/to/flake#devShells.x86_64-linux.shellname -> full path
+        """
+        if "#" not in ref:
+            return cls._from_path_only(ref)
+
+        return cls._from_path_with_shell(ref)
+
+    @classmethod
+    def _from_path_only(cls, ref: str) -> "FlakeRef":
+        """Create FlakeRef from path without shell specification."""
+        resolved_path = Path(ref).resolve()
+        return cls(
+            path=str(resolved_path),
+            shell=DEFAULT_SHELL_ATTR,
+        )
+
+    @classmethod
+    def _from_path_with_shell(cls, ref: str) -> "FlakeRef":
+        """Create FlakeRef from path with shell specification."""
+        path_str, shell = ref.split("#", 1)
+
+        if not shell.startswith(DEVSHELLS_PREFIX) and "." not in shell:
+            shell = f"{DEVSHELLS_PREFIX}${{system}}.{shell}"
+
+        resolved_path = Path(path_str).resolve()
+        return cls(path=str(resolved_path), shell=shell)
+
+    def __str__(self) -> str:
+        return f"{self.path}#{self.shell}"
