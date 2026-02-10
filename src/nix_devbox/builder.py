@@ -38,7 +38,7 @@ def build_image(
     flake_path.write_text(flake_content)
 
     if verbose:
-        logger.debug("生成的 flake.nix:\n%s", flake_content)
+        logger.debug("Generated flake.nix:\n%s", flake_content)
 
     _run_nix_build(tmp_dir, verbose)
     _load_docker_image(tmp_dir)
@@ -56,7 +56,9 @@ def _run_nix_build(tmp_dir: str, verbose: bool) -> None:
         )
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr
-        raise BuildError(f"构建失败: {exc}\n{stderr}" if stderr else f"构建失败: {exc}") from exc
+        raise BuildError(
+            f"Build failed: {exc}\n{stderr}" if stderr else f"Build failed: {exc}"
+        ) from exc
 
 
 def _load_docker_image(tmp_dir: str) -> None:
@@ -65,7 +67,7 @@ def _load_docker_image(tmp_dir: str) -> None:
     try:
         subprocess.run(["docker", "load", "-i", str(result_path)], check=True)
     except subprocess.CalledProcessError as exc:
-        raise DockerError(f"导入 Docker 失败: {exc}") from exc
+        raise DockerError(f"Docker import failed: {exc}") from exc
 
 
 def image_exists(image_ref: "ImageRef") -> bool:
@@ -91,6 +93,7 @@ def run_container(
     workdir: str | None = None,
     detach: bool = False,
     extra_args: list[str] | None = None,
+    dry_run: bool = False,
     verbose: bool = False,
 ) -> None:
     """
@@ -109,6 +112,7 @@ def run_container(
         workdir: Working directory inside the container
         detach: Whether to run in detached mode
         extra_args: Additional docker run arguments
+        dry_run: If True, print the command without executing
         verbose: Whether to print verbose output
 
     Raises:
@@ -129,13 +133,17 @@ def run_container(
         extra_args=extra_args,
     )
 
+    if dry_run:
+        print(" ".join(docker_cmd))
+        return
+
     if verbose:
-        logger.info("执行命令: %s", " ".join(docker_cmd))
+        logger.info("Executing command: %s", " ".join(docker_cmd))
 
     try:
         subprocess.run(docker_cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        raise DockerError(f"运行容器失败: {exc}") from exc
+        raise DockerError(f"Failed to run container: {exc}") from exc
 
 
 def _build_docker_command(

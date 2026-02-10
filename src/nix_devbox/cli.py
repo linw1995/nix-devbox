@@ -43,7 +43,7 @@ class RunConfig:
 
 def format_flake_refs(refs: list[FlakeRef]) -> str:
     """Format flake references for display."""
-    lines = ["将要合并的 devShell:"]
+    lines = ["DevShells to be merged:"]
     for i, ref in enumerate(refs, 1):
         lines.append(f"  {i}. {ref.path} -> {ref.shell}")
     lines.append("")
@@ -52,13 +52,13 @@ def format_flake_refs(refs: list[FlakeRef]) -> str:
 
 def _echo_build_start(image_ref: ImageRef) -> None:
     """Display build start message."""
-    click.echo(f"开始构建镜像 {image_ref}...")
+    click.echo(f"Building image {image_ref}...")
 
 
 def _echo_build_complete(image_ref: ImageRef) -> None:
     """Display build completion message."""
     click.echo()
-    click.secho(f"✅ 镜像构建完成: {image_ref}", fg="green")
+    click.secho(f"✅ Image built successfully: {image_ref}", fg="green")
 
 
 def build_image_with_progress(
@@ -90,21 +90,21 @@ def build_image_with_progress(
 @click.version_option(version=VERSION, prog_name="nix-devbox")
 def cli(ctx: "Context") -> None:
     """
-    Nix devbox - 合并多个 flake 的 devShell，构建并运行 Docker 容器
+    Nix devbox - Merge multiple flake devShells, build and run Docker containers
 
     \b
-    使用示例:
-        # 构建镜像
+    Usage examples:
+        # Build image
         nix-devbox build /path/to/project1
 
-        # 构建并运行
+        # Build and run
         nix-devbox run /path/to/project1
 
     \b
-    支持的 flake-ref 格式:
-        /path/to/flake              - 使用 default devShell
-        /path/to/flake#shellname    - 使用指定的 devShell
-        /path/to/flake#devShells.x86_64-linux.shellname - 完整属性路径
+    Supported flake-ref formats:
+        /path/to/flake              - Use default devShell
+        /path/to/flake#shellname    - Use specified devShell
+        /path/to/flake#devShells.x86_64-linux.shellname - Full attribute path
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -116,12 +116,12 @@ def cli(ctx: "Context") -> None:
     "-o",
     "--output",
     default=DEFAULT_IMAGE,
-    help="输出镜像名称和标签 (默认: devbox:latest)",
+    help="Output image name and tag (default: devbox:latest)",
     metavar="name:tag",
 )
-@click.option("-n", "--name", help="输出镜像名称 (覆盖 --output 中的名称)")
-@click.option("-t", "--tag", help="输出镜像标签 (覆盖 --output 中的标签)")
-@click.option("-v", "--verbose", is_flag=True, help="显示详细信息")
+@click.option("-n", "--name", help="Output image name (overrides --output)")
+@click.option("-t", "--tag", help="Output image tag (overrides --output)")
+@click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
 @click.pass_context
 def build(
     ctx: "Context",
@@ -131,7 +131,7 @@ def build(
     tag: str | None,
     verbose: bool,
 ) -> None:
-    """构建 Docker 镜像。"""
+    """Build Docker image."""
     image_ref = ImageRef.parse(output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
@@ -150,31 +150,37 @@ def build(
     "-o",
     "--output",
     default=DEFAULT_IMAGE,
-    help="镜像名称和标签 (默认: devbox:latest)",
+    help="Image name and tag (default: devbox:latest)",
     metavar="name:tag",
 )
-@click.option("-n", "--name", help="镜像名称 (覆盖 --output 中的名称)")
-@click.option("-t", "--tag", help="镜像标签 (覆盖 --output 中的标签)")
-@click.option("--container-name", help="容器名称")
+@click.option("-n", "--name", help="Image name (overrides --output)")
+@click.option("-t", "--tag", help="Image tag (overrides --output)")
+@click.option("--container-name", help="Container name")
 @click.option(
-    "-p", "--port", multiple=True, help="端口映射 (可多次使用，如: -p 8080:80)"
+    "-p",
+    "--port",
+    multiple=True,
+    help="Port mapping (can be used multiple times, e.g., -p 8080:80)",
 )
 @click.option(
     "--volume",
     "-V",
     multiple=True,
-    help="卷挂载 (可多次使用，如: -V /host:/container)",
+    help="Volume mount (can be used multiple times, e.g., -V /host:/container)",
 )
 @click.option(
-    "-e", "--env", multiple=True, help="环境变量 (可多次使用，如: -e KEY=value)"
+    "-e",
+    "--env",
+    multiple=True,
+    help="Environment variable (can be used multiple times, e.g., -e KEY=value)",
 )
-@click.option("-w", "--workdir", help="工作目录")
-@click.option("-d", "--detach", is_flag=True, help="后台运行容器")
-@click.option("--no-rm", is_flag=True, help="停止后不自动删除容器")
-@click.option("--rebuild", is_flag=True, help="强制重新构建镜像")
-@click.option("--dry-run", is_flag=True, help="只显示要执行的命令，不实际运行")
-@click.option("--verbose", "-v", is_flag=True, help="显示详细信息")
-@click.option("--cmd", help="要在容器中执行的命令 (用引号包裹)")
+@click.option("-w", "--workdir", help="Working directory")
+@click.option("-d", "--detach", is_flag=True, help="Run container in background")
+@click.option("--no-rm", is_flag=True, help="Do not remove container after it stops")
+@click.option("--rebuild", is_flag=True, help="Force rebuild image")
+@click.option("--dry-run", is_flag=True, help="Show commands without executing")
+@click.option("--verbose", "-v", is_flag=True, help="Show verbose output")
+@click.option("--cmd", help="Command to execute in container (quote it)")
 @click.pass_context
 def run(
     ctx: "Context",
@@ -194,7 +200,7 @@ def run(
     verbose: bool,
     cmd: str | None,
 ) -> None:
-    """运行容器（自动构建镜像如果不存在）。"""
+    """Run container (auto-builds image if not exists)."""
     config = RunConfig(
         image_ref=ImageRef.parse(output, name_override=name, tag_override=tag),
         flake_refs=[FlakeRef.parse(ref) for ref in flakes],
@@ -235,29 +241,28 @@ def _ensure_image_exists(
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
-        click.echo(f"强制重新构建镜像 {image_ref}...")
+        click.echo(f"Force rebuilding image {image_ref}...")
         build_image_with_progress(flake_refs, image_ref, verbose)
         return
 
     if image_exists(image_ref):
         return
 
-    click.echo(f"镜像 {image_ref} 不存在，开始构建...")
+    click.echo(f"Image {image_ref} not found, building...")
     build_image_with_progress(flake_refs, image_ref, verbose)
 
 
 def _run_container_with_config(config: RunConfig) -> None:
     """Run container with the specified configuration."""
     if config.dry_run:
-        click.echo("模拟运行容器...")
+        click.echo("Commands to be executed:")
     else:
-        click.echo(f"启动容器 {config.image_ref}...")
+        click.echo(f"Starting container {config.image_ref}...")
 
-    extra_args = ["--dry-run"] if config.dry_run else []
-
+    parsed_cmd = shlex.split(config.cmd) if config.cmd else None
     run_container(
         config.image_ref,
-        command=shlex.split(config.cmd) if config.cmd else None,
+        command=parsed_cmd,
         ports=list(config.ports),
         volumes=list(config.volumes),
         env=list(config.env),
@@ -267,13 +272,13 @@ def _run_container_with_config(config: RunConfig) -> None:
         tty=not config.detach,
         workdir=config.workdir,
         detach=config.detach,
-        extra_args=extra_args,
+        dry_run=config.dry_run,
         verbose=config.verbose,
     )
 
     if not config.detach and not config.dry_run:
         click.echo()
-        click.secho("✅ 容器已停止", fg="green")
+        click.secho("✅ Container stopped", fg="green")
 
 
 if __name__ == "__main__":
