@@ -32,3 +32,4 @@ __pycache__/
 .direnv/
 .dream2nix/
 .agents/
+__pypackages__/
