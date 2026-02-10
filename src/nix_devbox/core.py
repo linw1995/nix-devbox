@@ -29,19 +29,15 @@ _FLAKE_IMAGE_PACKAGE = """
 
 def _generate_inputs_section(flake_refs: list[FlakeRef]) -> list[str]:
     """Generate the inputs section of flake.nix."""
-    lines = [_FLAKE_INPUTS_START]
-    for i, ref in enumerate(flake_refs):
-        lines.append(f'    proj{i}.url = "path:{ref.path}";')
-    lines.append(_FLAKE_INPUTS_END)
-    return lines
+    proj_inputs = [
+        f'    proj{i}.url = "path:{ref.path}";' for i, ref in enumerate(flake_refs)
+    ]
+    return [_FLAKE_INPUTS_START, *proj_inputs, _FLAKE_INPUTS_END]
 
 
 def _generate_shell_definitions(flake_refs: list[FlakeRef]) -> list[str]:
     """Generate shell variable definitions."""
-    lines = []
-    for i, ref in enumerate(flake_refs):
-        lines.append(f"    shell{i} = proj{i}.{ref.shell};")
-    return lines
+    return [f"    shell{i} = proj{i}.{ref.shell};" for i, ref in enumerate(flake_refs)]
 
 
 def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
@@ -53,7 +49,7 @@ def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
 
 def _generate_inputs_from(flake_refs: list[FlakeRef]) -> list[str]:
     """Generate the inputsFrom list for composed shell."""
-    return [f"        shell{i}" for i in range(len(flake_refs))]
+    return [f"        shell{i}" for i, _ in enumerate(flake_refs)]
 
 
 def generate_flake(flake_refs: list[FlakeRef], image_ref: ImageRef) -> str:
@@ -84,8 +80,6 @@ def generate_flake(flake_refs: list[FlakeRef], image_ref: ImageRef) -> str:
     lines.extend(_generate_inputs_from(flake_refs))
     lines.append(_FLAKE_COMPOSED_SHELL_END)
 
-    lines.append(
-        _FLAKE_IMAGE_PACKAGE.format(name=image_ref.name, tag=image_ref.tag)
-    )
+    lines.append(_FLAKE_IMAGE_PACKAGE.format(name=image_ref.name, tag=image_ref.tag))
 
     return "\n".join(lines)

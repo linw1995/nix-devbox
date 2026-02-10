@@ -3,11 +3,19 @@
 import shlex
 import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 import click
 
 from .builder import build_image, image_exists, run_container
+from .config import (
+    DevboxConfig,
+    RunConfig,
+    _extract_part_by_separator,
+    find_config,
+    merge_devbox_configs,
+)
 from .core import generate_flake
 from .exceptions import DevboxError
 from .models import FlakeRef, ImageRef
@@ -23,8 +31,8 @@ TEMP_DIR_PREFIX = "nix-devbox."
 
 
 @dataclass(frozen=True)
-class RunConfig:
-    """Configuration for running a container."""
+class ContainerLaunchConfig:
+    """Configuration for launching a container from CLI."""
 
     image_ref: ImageRef
     flake_refs: list[FlakeRef]
@@ -38,7 +46,8 @@ class RunConfig:
     rebuild: bool = False
     dry_run: bool = False
     verbose: bool = False
-    cmd: str | None = None
+    command: str | None = None
+    devbox_config: DevboxConfig | None = None
 
 
 def format_flake_refs(refs: list[FlakeRef]) -> str:
@@ -79,9 +88,9 @@ def build_image_with_progress(
     """
     flake_content = generate_flake(flake_refs, image_ref)
 
-    with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
         _echo_build_start(image_ref)
-        build_image(flake_content, image_ref, tmp_dir, verbose)
+        build_image(flake_content, image_ref, temp_dir, verbose)
         _echo_build_complete(image_ref)
 
 
@@ -144,6 +153,31 @@ def build(
         raise click.ClickException(str(exc)) from exc
 
 
+def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
+    """Load and merge devbox configs from all flake directories.
+
+    Configs are merged in order: first flake's config is the base,
+    subsequent configs override/merge with it.
+    """
+    if not flake_refs:
+        return DevboxConfig()
+
+    # Load config from each flake directory
+    configs = []
+    for flake_ref in flake_refs:
+        flake_path = Path(flake_ref.path) / "flake.nix"
+        config = find_config(flake_path)
+        # Only add non-default configs
+        if config != DevboxConfig():
+            configs.append(config)
+
+    if not configs:
+        return DevboxConfig()
+
+    # Merge all configs
+    return merge_devbox_configs(configs)
+
+
 @cli.command()
 @click.argument("flakes", nargs=-1, required=True)
 @click.option(
@@ -180,7 +214,7 @@ def build(
 @click.option("--rebuild", is_flag=True, help="Force rebuild image")
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose output")
-@click.option("--cmd", help="Command to execute in container (quote it)")
+@click.option("--command", "--cmd", help="Command to execute in container (quote it)")
 @click.pass_context
 def run(
     ctx: "Context",
@@ -198,12 +232,17 @@ def run(
     rebuild: bool,
     dry_run: bool,
     verbose: bool,
-    cmd: str | None,
+    command: str | None,
 ) -> None:
     """Run container (auto-builds image if not exists)."""
-    config = RunConfig(
+    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
+
+    # Load config from the first flake directory
+    devbox_config = _load_devbox_config(flake_refs)
+
+    config = ContainerLaunchConfig(
         image_ref=ImageRef.parse(output, name_override=name, tag_override=tag),
-        flake_refs=[FlakeRef.parse(ref) for ref in flakes],
+        flake_refs=flake_refs,
         container_name=container_name,
         ports=port,
         volumes=volume,
@@ -214,11 +253,14 @@ def run(
         rebuild=rebuild,
         dry_run=dry_run,
         verbose=verbose,
-        cmd=cmd,
+        command=command,
+        devbox_config=devbox_config,
     )
 
     if config.verbose:
         click.echo(format_flake_refs(config.flake_refs))
+        if devbox_config.run.resources.memory:
+            click.echo("Using devbox config from flake directory")
 
     try:
         _ensure_image_exists(
@@ -252,29 +294,127 @@ def _ensure_image_exists(
     build_image_with_progress(flake_refs, image_ref, verbose)
 
 
-def _run_container_with_config(config: RunConfig) -> None:
+def _parse_port_mapping(mapping: str) -> tuple[str, str]:
+    """Parse port mapping 'host:container' into (host_port, full_mapping)."""
+    host_port = _extract_part_by_separator(mapping, ":", 0)
+    return host_port, mapping
+
+
+def _parse_volume_mapping(mapping: str) -> tuple[str, str]:
+    """Parse volume mapping 'host:container[:opts]' into (container_path, full_mapping)."""
+    container_path = _extract_part_by_separator(mapping, ":", 1)
+    return container_path, mapping
+
+
+def _parse_env_var(env_var: str) -> tuple[str, str]:
+    """Parse env var 'KEY=value' into (key, full_var)."""
+    key = _extract_part_by_separator(env_var, "=", 0)
+    return key, env_var
+
+
+def _parse_tmpfs(tmpfs: str) -> tuple[str, str]:
+    """Parse tmpfs mount '/path[:opts]' into (path, full_spec).
+
+    Examples:
+        /tmp:size=100m,mode=1777 -> ("/tmp", "/tmp:size=100m,mode=1777")
+        /var/cache -> ("/var/cache", "/var/cache")
+    """
+    path = _extract_part_by_separator(tmpfs, ":", 0)
+    return path, tmpfs
+
+
+def _merge_mappings(
+    base: list[str],
+    overrides: tuple[str, ...],
+    parse_func: Callable[[str], tuple[str, str]],
+) -> list[str]:
+    """
+    Merge mappings with CLI overrides taking precedence.
+
+    Uses a dict to track unique keys, allowing O(1) lookup for duplicates.
+    Order is preserved: base items first (unless overridden), then overrides.
+
+    Args:
+        base: Base mappings from config file
+        overrides: CLI override mappings
+        parse_func: Function to parse (key, full_value) from a mapping
+
+    Returns:
+        Merged list with overrides applied
+    """
+    if not overrides:
+        return list(base)
+
+    # Build lookup of override keys to their full values
+    override_items = dict(parse_func(item) for item in overrides)
+
+    # Start with base items, filtering out those that are overridden
+    result = [item for item in base if parse_func(item)[0] not in override_items]
+
+    # Append all override items (preserving CLI order)
+    result.extend(overrides)
+
+    return result
+
+
+def _prepare_container_config(
+    config: ContainerLaunchConfig,
+) -> dict[str, Any]:
+    """Prepare docker run configuration by merging file and CLI settings.
+
+    Args:
+        config: Container launch configuration from CLI
+
+    Returns:
+        Keyword arguments dict for run_container()
+    """
+    # Get config from file or use empty defaults
+    file_config = config.devbox_config.run if config.devbox_config else RunConfig()
+
+    # Build extra args from config file (only non-list args)
+    extra_args = file_config._to_non_list_docker_args()
+
+    # Merge config file values with CLI overrides (CLI takes precedence)
+    merged_ports = _merge_mappings(
+        file_config.ports, config.ports, parse_func=_parse_port_mapping
+    )
+    merged_volumes = _merge_mappings(
+        file_config.volumes, config.volumes, parse_func=_parse_volume_mapping
+    )
+    merged_env = _merge_mappings(file_config.env, config.env, parse_func=_parse_env_var)
+    merged_tmpfs = _merge_mappings(
+        file_config.tmpfs, (), parse_func=_parse_tmpfs  # tmpfs only from config file
+    )
+
+    parsed_cmd = shlex.split(config.command) if config.command else None
+
+    return {
+        "command": parsed_cmd,
+        "ports": merged_ports,
+        "volumes": merged_volumes,
+        "env": merged_env,
+        "tmpfs": merged_tmpfs,
+        "container_name": config.container_name,
+        "rm": not config.no_rm,
+        "interactive": not config.detach,
+        "tty": not config.detach,
+        "workdir": config.workdir,
+        "detach": config.detach,
+        "extra_args": extra_args,
+        "dry_run": config.dry_run,
+        "verbose": config.verbose,
+    }
+
+
+def _run_container_with_config(config: ContainerLaunchConfig) -> None:
     """Run container with the specified configuration."""
     if config.dry_run:
         click.echo("Commands to be executed:")
     else:
         click.echo(f"Starting container {config.image_ref}...")
 
-    parsed_cmd = shlex.split(config.cmd) if config.cmd else None
-    run_container(
-        config.image_ref,
-        command=parsed_cmd,
-        ports=list(config.ports),
-        volumes=list(config.volumes),
-        env=list(config.env),
-        container_name=config.container_name,
-        rm=not config.no_rm,
-        interactive=not config.detach,
-        tty=not config.detach,
-        workdir=config.workdir,
-        detach=config.detach,
-        dry_run=config.dry_run,
-        verbose=config.verbose,
-    )
+    run_kwargs = _prepare_container_config(config)
+    run_container(config.image_ref, **run_kwargs)
 
     if not config.detach and not config.dry_run:
         click.echo()

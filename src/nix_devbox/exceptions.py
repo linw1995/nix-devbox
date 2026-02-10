@@ -23,3 +23,9 @@ class FlakeError(DevboxError):
     """Raised when flake.nix generation or parsing fails."""
 
     pass
+
+
+class ConfigError(DevboxError):
+    """Raised when configuration file parsing fails."""
+
+    pass

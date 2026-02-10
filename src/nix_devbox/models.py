@@ -29,10 +29,14 @@ class ImageRef:
         tag_override: str | None = None,
     ) -> "ImageRef":
         """Parse image reference from string like 'name:tag' or 'name'."""
-        if ":" in value:
-            name, tag = value.split(":", 1)
-        else:
-            name, tag = value, DEFAULT_TAG
+        if not value or not value.strip():
+            raise ValueError("Image reference cannot be empty")
+
+        # Use partition for cleaner splitting (EAFP style)
+        # partition always returns 3 parts: (before, separator, after)
+        name, sep, tag = value.partition(":")
+        if not sep:
+            tag = DEFAULT_TAG
 
         return cls(
             name=name_override or name,
@@ -74,7 +78,8 @@ class FlakeRef:
     @classmethod
     def _from_path_with_shell(cls, ref: str) -> "FlakeRef":
         """Create FlakeRef from path with shell specification."""
-        path_str, shell = ref.split("#", 1)
+        # Use partition for safer splitting
+        path_str, _, shell = ref.partition("#")
 
         if not shell.startswith(DEVSHELLS_PREFIX) and "." not in shell:
             shell = f"{DEVSHELLS_PREFIX}${{system}}.{shell}"

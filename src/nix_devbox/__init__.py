@@ -2,14 +2,18 @@
 
 __version__ = "0.1.0"
 
-from .exceptions import BuildError, DevboxError, DockerError, FlakeError
+from .config import DevboxConfig, merge_devbox_configs
+from .exceptions import BuildError, ConfigError, DevboxError, DockerError, FlakeError
 from .models import FlakeRef, ImageRef
 
 __all__ = [
     "FlakeRef",
     "ImageRef",
+    "DevboxConfig",
+    "merge_devbox_configs",
     "DevboxError",
     "BuildError",
+    "ConfigError",
     "DockerError",
     "FlakeError",
 ]

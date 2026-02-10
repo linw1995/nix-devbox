@@ -1,0 +1,7 @@
+# Stacked example - overrides base + opencode configs
+run:
+  resources:
+    memory: "2g"  # Override base's 1g
+
+  ports:
+    - "9000:9000"  # Add custom service port
