@@ -37,6 +37,10 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
     entrypoint = pkgs.writeShellScriptBin "entrypoint" ''
       set -e
 
+      # Get target UID/GID from environment (defaults to 1000:100)
+      TARGET_UID="''${USER_ID:-1000}"
+      TARGET_GID="''${GROUP_ID:-100}"
+
       # Fix permissions on mounted directories (running as root)
       if [ -d /build ]; then
         ${pkgs.coreutils}/bin/chmod 777 /build 2>/dev/null || true
@@ -51,8 +55,16 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         ${pkgs.coreutils}/bin/chmod -R 777 "$dir" 2>/dev/null || true
       done
 
-      # Fix ownership
-      ${pkgs.coreutils}/bin/chown -R 1000:100 /build 2>/dev/null || true
+      # Fix ownership to target UID/GID
+      ${pkgs.coreutils}/bin/chown -R "$TARGET_UID:$TARGET_GID" /build 2>/dev/null || true
+
+      # Ensure target user exists in /etc/passwd and /etc/group
+      if ! ${pkgs.gnugrep}/bin/grep -q "^nixbld:" /etc/group 2>/dev/null; then
+        echo "nixbld:x:$TARGET_GID:" >> /etc/group
+      fi
+      if ! ${pkgs.gnugrep}/bin/grep -q "^nixbld:" /etc/passwd 2>/dev/null; then
+        echo "nixbld:x:$TARGET_UID:$TARGET_GID::/build:/bin/bash" >> /etc/passwd
+      fi
 
       # Find buildNixShellImage's rcfile
       rcfile=$(${pkgs.coreutils}/bin/ls /nix/store/*-nix-shell-rc 2>/dev/null | ${pkgs.coreutils}/bin/head -1)
@@ -61,13 +73,13 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         exit 1
       fi
 
-      # Run as nixbld user
+      # Run as target user
       if [ $# -eq 0 ]; then
-        exec ${pkgs.gosu}/bin/gosu 1000 ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
+        exec ${pkgs.gosu}/bin/gosu "$TARGET_UID:$TARGET_GID" ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
       else
         # Execute command with rcfile sourced via BASH_ENV
         export BASH_ENV="$rcfile"
-        exec ${pkgs.gosu}/bin/gosu 1000 "$@"
+        exec ${pkgs.gosu}/bin/gosu "$TARGET_UID:$TARGET_GID" "$@"
       fi
     '';
 
@@ -92,6 +104,7 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
       contents = [
         entrypoint
         pkgs.gosu
+        pkgs.gnugrep
       ];
       config = {
         Entrypoint = [ "/bin/entrypoint" ];

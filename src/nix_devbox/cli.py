@@ -1,5 +1,6 @@
 """CLI interface using Click."""
 
+import os
 import shlex
 import tempfile
 from dataclasses import dataclass
@@ -409,6 +410,18 @@ def _prepare_container_config(
     merged_tmpfs = _merge_mappings(
         file_config.tmpfs, (), parse_func=_parse_tmpfs  # tmpfs only from config file
     )
+
+    # Auto-inject USER_ID and GROUP_ID to match current user
+    # This ensures the container has correct permissions on mounted volumes
+    current_uid = os.getuid()
+    current_gid = os.getgid()
+
+    # Check if USER_ID/GROUP_ID are already set (CLI or config file)
+    env_keys = {_parse_env_var(item)[0] for item in merged_env}
+    if "USER_ID" not in env_keys:
+        merged_env.append(f"USER_ID={current_uid}")
+    if "GROUP_ID" not in env_keys:
+        merged_env.append(f"GROUP_ID={current_gid}")
 
     parsed_cmd = shlex.split(config.command) if config.command else None
 
