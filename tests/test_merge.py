@@ -200,7 +200,10 @@ class TestMergeTwoConfigs:
         base = DevboxConfig.from_dict(
             {
                 "run": {
-                    "security": {"cap_drop": ["ALL"], "cap_add": ["NET_BIND_SERVICE"]}
+                    "security": {
+                        "cap_drop": ["ALL"],
+                        "cap_add": ["NET_BIND_SERVICE"],
+                    }
                 }
             }
         )
@@ -288,3 +291,85 @@ class TestMergeDevboxConfigs:
         assert "8080:80" in merged.run.ports
         assert "3000:3000" in merged.run.ports
         assert "KEY=value" in merged.run.env
+
+
+class TestMergeInitConfig:
+    """Tests for init configuration merging."""
+
+    def test_init_commands_merge(self):
+        """Init commands should be merged (not overridden)."""
+        base = DevboxConfig.from_dict(
+            {"init": {"commands": ["mkdir -p /workspace", "chmod 777 /workspace"]}}
+        )
+        override = DevboxConfig.from_dict(
+            {"init": {"commands": ["mkdir -p /build", "chmod 777 /build"]}}
+        )
+
+        merged = _merge_two_configs(base, override)
+
+        # Both sets of commands should be present
+        assert "mkdir -p /workspace" in merged.init.commands
+        assert "chmod 777 /workspace" in merged.init.commands
+        assert "mkdir -p /build" in merged.init.commands
+        assert "chmod 777 /build" in merged.init.commands
+
+    def test_init_commands_deduplication(self):
+        """Duplicate commands should be removed."""
+        base = DevboxConfig.from_dict({"init": {"commands": ["mkdir -p /workspace"]}})
+        override = DevboxConfig.from_dict(
+            {"init": {"commands": ["mkdir -p /workspace", "chmod 777 /build"]}}
+        )
+
+        merged = _merge_two_configs(base, override)
+
+        # Duplicate command should appear only once
+        assert merged.init.commands.count("mkdir -p /workspace") == 1
+        assert "chmod 777 /build" in merged.init.commands
+
+    def test_multiple_configs_init_merge(self):
+        """Multiple configs should merge init commands in order."""
+        config1 = DevboxConfig.from_dict({"init": {"commands": ["echo 'config1'"]}})
+        config2 = DevboxConfig.from_dict({"init": {"commands": ["echo 'config2'"]}})
+        config3 = DevboxConfig.from_dict({"init": {"commands": ["echo 'config3'"]}})
+
+        merged = merge_devbox_configs([config1, config2, config3])
+
+        # All commands from all configs should be present
+        assert "echo 'config1'" in merged.init.commands
+        assert "echo 'config2'" in merged.init.commands
+        assert "echo 'config3'" in merged.init.commands
+
+    def test_empty_init_config(self):
+        """Empty init config should not affect merged result."""
+        base = DevboxConfig.from_dict({"init": {"commands": ["mkdir -p /workspace"]}})
+        override = DevboxConfig.from_dict({})  # No init config
+
+        merged = _merge_two_configs(base, override)
+
+        # Base commands should be preserved
+        assert "mkdir -p /workspace" in merged.init.commands
+
+    def test_run_and_init_config_together(self):
+        """Both run and init configs should be merged correctly."""
+        config1 = DevboxConfig.from_dict(
+            {
+                "run": {"resources": {"memory": "1g"}},
+                "init": {"commands": ["mkdir -p /workspace"]},
+            }
+        )
+        config2 = DevboxConfig.from_dict(
+            {
+                "run": {"resources": {"cpus": "2.0"}},
+                "init": {"commands": ["chmod 777 /workspace"]},
+            }
+        )
+
+        merged = merge_devbox_configs([config1, config2])
+
+        # Both run configs merged
+        assert merged.run.resources.memory == "1g"
+        assert merged.run.resources.cpus == "2.0"
+
+        # Both init commands merged
+        assert "mkdir -p /workspace" in merged.init.commands
+        assert "chmod 777 /workspace" in merged.init.commands

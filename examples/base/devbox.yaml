@@ -11,18 +11,15 @@ run:
     # 丢弃所有 Linux 能力（最小权限原则）
     cap_drop:
       - "ALL"
-    # 如需特定能力，按需添加：
-    # cap_add:
-    #   - "NET_BIND_SERVICE"   # 绑定 1024 以下端口
-    #   - "SYS_PTRACE"         # 调试/跟踪进程
+    # 保留切换用户所需的能力（entrypoint 用 gosu 切换到 nixbld）
+    cap_add:
+      - "SETUID"
+      - "SETGID"
 
   # 资源限制（开发环境建议设置，防止资源泄漏拖垮宿主机）
   resources:
-    # 内存限制（如 512m, 1g, 2g）
     memory: "1g"
-    # CPU 限制（如 0.5, 1.0, 2.0）
     cpus: "2.0"
-    # 最大进程数限制（防止 fork 炸弹）
     pids_limit: 100
 
   # 日志配置（防止日志文件无限增长）
@@ -32,50 +29,11 @@ run:
       max-size: "10m"
       max-file: "3"
 
-  # 默认端口映射（devshell 常用开发端口）
-  # ports:
-  #   - "3000:3000"    # Node.js/React
-  #   - "8080:8080"    # Java/Spring
-  #   - "5000:5000"    # Python Flask
-  #   - "8000:8000"    # Python Django/ASGI
-  #   - "9000:9000"    # 通用开发端口
-
-  # 默认卷映射（开发环境推荐挂载当前目录）
-  # 注意：按容器路径合并，相同容器路径会被后面的配置覆盖
-  # 支持环境变量: $HOME, ${PWD}, $USER 等
-  # volumes:
-  #   - ".:/workspace"
-  #   - "nix-store:/nix/store:ro"  # 可选：共享 nix store
-  #   - "./data:/app/data"  # 如果多个项目都映射 /app/data，后面的会覆盖前面的
-  #   - "$HOME/.config:/root/.config"  # 使用环境变量
-
   # 默认环境变量
-  # env:
-  #   - "TERM=xterm-256color"
-  #   - "EDITOR=vim"
-
-  # tmpfs 挂载（内存文件系统，适合 /tmp 等临时目录）
-  # tmpfs:
-  #   - "/tmp:size=100m,mode=1777,noexec,nosuid"
-  #   - "/var/cache:size=50m"
-
-  # 额外的 docker run 参数
-  extra_args:
-    ## 开发环境必备：容器停止后自动删除
-    #- "--rm"
-    # 开发环境可选：分配伪终端（已默认启用）
-    # - "-t"
-    # 开发环境可选：保持 stdin 开放（已默认启用）
-    # - "-i"
-    # 如需指定运行用户（推荐与宿主机用户一致，避免权限问题）
-    # - "-u"
-    # - "1000:1000"
-    # 可选：容器名称（便于识别）
-    # - "--name"
-    # - "my-devbox"
-    # 可选：工作目录
-    # - "-w"
-    # - "/workspace"
-    # 可选：主机名
-    # - "-h"
-    # - "devbox"
+  env:
+    - TERM=xterm-256color
+    - EDITOR=nvim
+    - XDG_CONFIG_HOME=/build/.config
+    - XDG_DATA_HOME=/build/.local/share
+    - XDG_CACHE_HOME=/build/.cache
+    - XDG_STATE_HOME=/build/.local/state

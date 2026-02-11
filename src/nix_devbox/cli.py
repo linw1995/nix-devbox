@@ -41,6 +41,7 @@ class ContainerLaunchConfig:
     volumes: tuple[str, ...] = ()
     env: tuple[str, ...] = ()
     workdir: str | None = None
+    user: str | None = None
     detach: bool = False
     no_rm: bool = False
     rebuild: bool = False
@@ -74,6 +75,7 @@ def build_image_with_progress(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
     verbose: bool,
+    init_commands: list[str] | None = None,
 ) -> None:
     """
     Build the Docker image with progress output.
@@ -82,11 +84,12 @@ def build_image_with_progress(
         flake_refs: List of flake references to merge
         image_ref: Target image reference
         verbose: Whether to print verbose output
+        init_commands: Optional list of commands to run when shell starts
 
     Raises:
         DevboxError: If build fails
     """
-    flake_content = generate_flake(flake_refs, image_ref)
+    flake_content = generate_flake(flake_refs, image_ref, init_commands)
 
     with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
         _echo_build_start(image_ref)
@@ -144,11 +147,19 @@ def build(
     image_ref = ImageRef.parse(output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
+    # Load and merge devbox configs to get init commands
+    devbox_config = _load_devbox_config(flake_refs)
+    init_commands = (
+        devbox_config.init.commands if devbox_config and devbox_config.init else []
+    )
+
     if verbose:
         click.echo(format_flake_refs(flake_refs))
+        if init_commands:
+            click.echo(f"Init commands: {init_commands}")
 
     try:
-        build_image_with_progress(flake_refs, image_ref, verbose)
+        build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -209,6 +220,11 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
     help="Environment variable (can be used multiple times, e.g., -e KEY=value)",
 )
 @click.option("-w", "--workdir", help="Working directory")
+@click.option(
+    "-u",
+    "--user",
+    help="User to run container as (uid:gid format, e.g., '1000:1000')",
+)
 @click.option("-d", "--detach", is_flag=True, help="Run container in background")
 @click.option("--no-rm", is_flag=True, help="Do not remove container after it stops")
 @click.option("--rebuild", is_flag=True, help="Force rebuild image")
@@ -227,6 +243,7 @@ def run(
     volume: tuple[str, ...],
     env: tuple[str, ...],
     workdir: str | None,
+    user: str | None,
     detach: bool,
     no_rm: bool,
     rebuild: bool,
@@ -248,6 +265,7 @@ def run(
         volumes=volume,
         env=env,
         workdir=workdir,
+        user=user,
         detach=detach,
         no_rm=no_rm,
         rebuild=rebuild,
@@ -262,12 +280,17 @@ def run(
         if devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
+    # Extract init commands from merged config
+    file_init = config.devbox_config.init if config.devbox_config else None
+    init_commands = file_init.commands if file_init else []
+
     try:
         _ensure_image_exists(
             flake_refs=config.flake_refs,
             image_ref=config.image_ref,
             force_rebuild=config.rebuild,
             verbose=config.verbose,
+            init_commands=init_commands,
         )
         _run_container_with_config(config)
     except DevboxError as exc:
@@ -280,18 +303,19 @@ def _ensure_image_exists(
     image_ref: ImageRef,
     force_rebuild: bool,
     verbose: bool,
+    init_commands: list[str] | None = None,
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
-        build_image_with_progress(flake_refs, image_ref, verbose)
+        build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
         return
 
     if image_exists(image_ref):
         return
 
     click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose)
+    build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
 
 
 def _parse_port_mapping(mapping: str) -> tuple[str, str]:
@@ -388,6 +412,16 @@ def _prepare_container_config(
 
     parsed_cmd = shlex.split(config.command) if config.command else None
 
+    # User: CLI takes precedence over config file
+    # If CLI doesn't specify, use config file value
+    # If config file doesn't specify, default to None (entrypoint will handle user switching)
+    # The entrypoint starts as root and switches to nixbld automatically
+    merged_user = config.user
+    if merged_user is None:
+        merged_user = file_config.user
+    # Note: We no longer default to current user here because the entrypoint
+    # handles user switching. Setting -u would prevent entrypoint from using gosu.
+
     return {
         "command": parsed_cmd,
         "ports": merged_ports,
@@ -399,6 +433,7 @@ def _prepare_container_config(
         "interactive": not config.detach,
         "tty": not config.detach,
         "workdir": config.workdir,
+        "user": merged_user,
         "detach": config.detach,
         "extra_args": extra_args,
         "dry_run": config.dry_run,
@@ -406,14 +441,101 @@ def _prepare_container_config(
     }
 
 
+def _parse_host_path(volume: str) -> str | None:
+    """Extract host path from volume mapping.
+
+    Args:
+        volume: Volume mapping string (e.g., "/host:/container:rw")
+
+    Returns:
+        Host path or None if not a bind mount
+    """
+    # Handle named volumes and tmpfs differently
+    if volume.startswith("/") or volume.startswith("$") or volume.startswith("~"):
+        # Bind mount - extract host path (before first colon)
+        return volume.split(":")[0]
+    return None
+
+
+def _prepare_host_volumes(volumes: list[str]) -> None:
+    """Prepare host directories for volume mounts.
+
+    This ensures both the mount point and its parent directories exist on the host
+    with correct permissions. When Docker creates missing directories, they become
+    root-owned, which prevents container users from creating sibling directories.
+
+    For example, mounting host:~/.config/app:/build/.config/app requires:
+    - ~/.config/app to exist (mount point)
+    - ~/.config to exist (parent, so Docker doesn't create /build/.config as root)
+
+    Args:
+        volumes: List of volume mappings
+    """
+    import os
+    from pathlib import Path
+
+    for volume in volumes:
+        host_path = _parse_host_path(volume)
+        if not host_path:
+            continue
+
+        # Expand environment variables
+        expanded = os.path.expandvars(host_path)
+        if expanded.startswith("$"):
+            continue
+
+        try:
+            path = Path(expanded)
+
+            # Create the mount point directory itself
+            if not path.exists():
+                path.mkdir(parents=True, exist_ok=True)
+            elif path.stat().st_uid == 0:  # root-owned, try to fix
+                try:
+                    import shutil
+
+                    shutil.chown(path, user=os.getuid(), group=os.getgid())
+                except (PermissionError, OSError):
+                    try:
+                        os.chmod(path, 0o777)
+                    except (PermissionError, OSError):
+                        pass
+
+            # Also ensure parent directory exists to prevent Docker from
+            # creating it as root in the container
+            parent = path.parent
+            if parent and not parent.exists():
+                parent.mkdir(parents=True, exist_ok=True)
+            elif parent and parent.exists() and parent.stat().st_uid == 0:
+                # Parent is root-owned, this will cause permission issues
+                # for sibling directories in container (e.g., /build/.cache)
+                try:
+                    import shutil
+
+                    shutil.chown(parent, user=os.getuid(), group=os.getgid())
+                except (PermissionError, OSError):
+                    try:
+                        os.chmod(parent, 0o777)
+                    except (PermissionError, OSError):
+                        pass
+
+        except (OSError, PermissionError):
+            pass
+
+
 def _run_container_with_config(config: ContainerLaunchConfig) -> None:
     """Run container with the specified configuration."""
+    run_kwargs = _prepare_container_config(config)
+
+    # Prepare host volumes (create directories, fix permissions)
+    if not config.dry_run:
+        _prepare_host_volumes(run_kwargs.get("volumes", []))
+
     if config.dry_run:
         click.echo("Commands to be executed:")
     else:
         click.echo(f"Starting container {config.image_ref}...")
 
-    run_kwargs = _prepare_container_config(config)
     run_container(config.image_ref, **run_kwargs)
 
     if not config.detach and not config.dry_run:

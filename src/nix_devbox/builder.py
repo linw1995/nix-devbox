@@ -101,6 +101,7 @@ def run_container(
     interactive: bool = True,
     tty: bool = True,
     workdir: str | None = None,
+    user: str | None = None,
     detach: bool = False,
     extra_args: list[str] | None = None,
     dry_run: bool = False,
@@ -121,6 +122,7 @@ def run_container(
         interactive: Whether to keep stdin open
         tty: Whether to allocate a pseudo-TTY
         workdir: Working directory inside the container
+        user: User to run container as (uid:gid format, e.g., "1000:1000")
         detach: Whether to run in detached mode
         extra_args: Additional docker run arguments
         dry_run: If True, print the command without executing
@@ -141,6 +143,7 @@ def run_container(
         interactive=interactive,
         tty=tty,
         workdir=workdir,
+        user=user,
         detach=detach,
         extra_args=extra_args,
     )
@@ -171,6 +174,7 @@ def _build_docker_command(
     interactive: bool,
     tty: bool,
     workdir: str | None,
+    user: str | None,
     detach: bool,
     extra_args: list[str] | None,
 ) -> list[str]:
@@ -184,7 +188,7 @@ def _build_docker_command(
     cmd_parts.append(_build_boolean_flags(rm, interactive, tty, detach))
 
     # Named options
-    cmd_parts.append(_build_named_options(container_name, workdir))
+    cmd_parts.append(_build_named_options(container_name, workdir, user))
 
     # List options with flags
     cmd_parts.append(expand_flagged_options("-p", ports))
@@ -224,12 +228,15 @@ def _build_boolean_flags(
     return flags
 
 
-def _build_named_options(container_name: str | None, workdir: str | None) -> list[str]:
+def _build_named_options(
+    container_name: str | None, workdir: str | None, user: str | None
+) -> list[str]:
     """Build list of named options (key-value pairs) for docker run."""
     # Use itertools.chain to flatten conditional option pairs
     return list(
         chain(
             ("--name", container_name) if container_name else (),
             ("-w", workdir) if workdir else (),
+            ("-u", user) if user else (),
         )
     )

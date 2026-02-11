@@ -19,15 +19,7 @@
         devShells = {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              coreutils
-              bash
-              busybox
-
-              # editor
-              neovim
-
-              # for terminfo
-              ncurses
+              nodejs
             ];
           };
         };

@@ -17,6 +17,16 @@ from .utils import expand_flagged_options
 # Does not match $$ (double dollar, which represents literal $)
 _ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 
+
+def _get_current_user() -> str:
+    """Get current user in uid:gid format.
+
+    Returns:
+        String in format "uid:gid" for the current process owner.
+    """
+    return f"{os.getuid()}:{os.getgid()}"
+
+
 # Unique placeholder using Unicode private use area characters
 # These characters (U+E000-U+F8FF) are reserved for private use and won't
 # appear in normal text input, making collisions virtually impossible.
@@ -195,6 +205,8 @@ class RunConfig:
     env: list[str] = field(default_factory=list)
     tmpfs: list[str] = field(default_factory=list)
     extra_args: list[str] = field(default_factory=list)
+    # User to run container as (uid:gid format, e.g., "1000:1000")
+    user: str | None = None
 
     def to_docker_args(self) -> list[str]:
         """Convert run config to docker run arguments (including all options)."""
@@ -225,6 +237,8 @@ class RunConfig:
         args.extend(self.security.to_docker_args())
         args.extend(self.resources.to_docker_args())
         args.extend(self.logging.to_docker_args())
+        if self.user:
+            args.extend(["-u", self.user])
         return args
 
 
@@ -271,6 +285,10 @@ def _parse_run_config(data: dict[str, Any]) -> RunConfig:
     tmpfs = expand_env_vars_in_list(data.get("tmpfs", []))
     extra_args = expand_env_vars_in_list(data.get("extra_args", []))
 
+    # Get user config: if not specified, leave as None
+    # The entrypoint will handle user switching automatically
+    user = data.get("user")
+
     # Note: ports and env typically don't need env var expansion
     # as they are usually fixed values or container-side configs
     return RunConfig(
@@ -282,6 +300,26 @@ def _parse_run_config(data: dict[str, Any]) -> RunConfig:
         env=data.get("env", []),
         tmpfs=tmpfs,
         extra_args=extra_args,
+        user=user,
+    )
+
+
+@dataclass(frozen=True)
+class InitConfig:
+    """Container initialization configuration (runs on container start)."""
+
+    # Commands to run when container starts (before the main command)
+    # Use this to create directories, set permissions, etc.
+    # These run as the container user (not root, unless user: "0:0")
+    commands: list[str] = field(default_factory=list)
+
+
+def _parse_init_config(data: dict[str, Any] | None) -> InitConfig:
+    """Parse init configuration from dict."""
+    if data is None:
+        return InitConfig()
+    return InitConfig(
+        commands=data.get("commands", []),
     )
 
 
@@ -290,6 +328,7 @@ class DevboxConfig:
     """Full nix-devbox configuration."""
 
     run: RunConfig = field(default_factory=RunConfig)
+    init: InitConfig = field(default_factory=InitConfig)
 
     @classmethod
     def from_file(cls, path: Path | str) -> DevboxConfig:
@@ -320,7 +359,11 @@ class DevboxConfig:
     def from_dict(cls, data: dict[str, Any]) -> DevboxConfig:
         """Create config from dictionary."""
         run_data = data.get("run", {})
-        return cls(run=_parse_run_config(run_data))
+        init_data = data.get("init", {})
+        return cls(
+            run=_parse_run_config(run_data),
+            init=_parse_init_config(init_data),
+        )
 
 
 def find_config(flake_path: Path | str) -> DevboxConfig:
@@ -430,9 +473,17 @@ def _merge_two_configs(base: DevboxConfig, override: DevboxConfig) -> DevboxConf
         env=_merge_env(base_run.env, override_run.env),
         tmpfs=_merge_tmpfs(base_run.tmpfs, override_run.tmpfs),
         extra_args=_merge_lists(base_run.extra_args, override_run.extra_args),
+        user=_pick_override_or_base(override_run.user, base_run.user),
     )
 
-    return DevboxConfig(run=merged_run)
+    # Merge init config - merge commands lists
+    base_init = base.init
+    override_init = override.init
+    merged_init = InitConfig(
+        commands=_merge_lists(base_init.commands, override_init.commands),
+    )
+
+    return DevboxConfig(run=merged_run, init=merged_init)
 
 
 def _merge_lists(base: list[str], override: list[str]) -> list[str]:
