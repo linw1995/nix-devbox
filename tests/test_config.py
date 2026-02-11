@@ -88,7 +88,7 @@ class TestLoggingConfig:
 
     def test_default_values(self):
         cfg = LoggingConfig()
-        assert cfg.driver == "json-file"
+        assert cfg.driver is None  # Default is None (use Docker default)
         assert cfg.options == {}
 
     def test_to_docker_args(self):

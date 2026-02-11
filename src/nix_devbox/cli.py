@@ -1,7 +1,9 @@
 """CLI interface using Click."""
 
 import os
+import re
 import shlex
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import click
 
+from . import __version__ as VERSION
 from .builder import build_image, image_exists, run_container
 from .config import (
     DevboxConfig,
@@ -26,8 +29,25 @@ if TYPE_CHECKING:
 
 
 # Constants
-VERSION = "0.1.0"
 TEMP_DIR_PREFIX = "nix-devbox."
+PERMISSION_EVERYONE_READ_WRITE_EXECUTE = 0o777  # For directory creation fallback
+
+
+def _sanitize_name_for_docker(value: str) -> str:
+    """Sanitize a string for use as Docker image name.
+
+    Docker image names must be lowercase and can only contain
+    alphanumeric characters, hyphens, underscores, and periods.
+
+    Args:
+        value: The string to sanitize
+
+    Returns:
+        Sanitized string safe for use as image name component
+    """
+    # Replace non-alphanumeric chars with hyphens, collapse multiple hyphens
+    sanitized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return sanitized or "devbox"
 
 
 def _get_default_image_name() -> str:
@@ -36,15 +56,8 @@ def _get_default_image_name() -> str:
     Returns:
         Image name in format 'dirname-dev:latest'
     """
-    cwd = os.getcwd()
-    dir_name = os.path.basename(cwd)
-    # Sanitize directory name for use as image name
-    # Replace spaces and special characters with hyphens
-    safe_name = "".join(c if c.isalnum() else "-" for c in dir_name).lower()
-    # Remove leading/trailing hyphens and collapse multiple hyphens
-    safe_name = "-".join(filter(None, safe_name.split("-")))
-    if not safe_name:
-        safe_name = "devbox"
+    dir_name = Path.cwd().name
+    safe_name = _sanitize_name_for_docker(dir_name)
     return f"{safe_name}-dev:latest"
 
 
@@ -78,22 +91,10 @@ def format_flake_refs(refs: list[FlakeRef]) -> str:
     return "\n".join(lines)
 
 
-def _echo_build_start(image_ref: ImageRef) -> None:
-    """Display build start message."""
-    click.echo(f"Building image {image_ref}...")
-
-
-def _echo_build_complete(image_ref: ImageRef) -> None:
-    """Display build completion message."""
-    click.echo()
-    click.secho(f"✅ Image built successfully: {image_ref}", fg="green")
-
-
 def build_image_with_progress(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
     verbose: bool,
-    init_commands: list[str] | None = None,
 ) -> None:
     """
     Build the Docker image with progress output.
@@ -102,17 +103,17 @@ def build_image_with_progress(
         flake_refs: List of flake references to merge
         image_ref: Target image reference
         verbose: Whether to print verbose output
-        init_commands: Optional list of commands to run when shell starts
 
     Raises:
         DevboxError: If build fails
     """
-    flake_content = generate_flake(flake_refs, image_ref, init_commands)
+    flake_content = generate_flake(flake_refs, image_ref)
 
     with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
-        _echo_build_start(image_ref)
+        click.echo(f"Building image {image_ref}...")
         build_image(flake_content, image_ref, temp_dir, verbose)
-        _echo_build_complete(image_ref)
+        click.echo()
+        click.secho(f"✅ Image built successfully: {image_ref}", fg="green")
 
 
 @click.group(invoke_without_command=True)
@@ -167,19 +168,11 @@ def build(
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
-    # Load and merge devbox configs to get init commands
-    devbox_config = _load_devbox_config(flake_refs)
-    init_commands = (
-        devbox_config.init.commands if devbox_config and devbox_config.init else []
-    )
-
     if verbose:
         click.echo(format_flake_refs(flake_refs))
-        if init_commands:
-            click.echo(f"Init commands: {init_commands}")
 
     try:
-        build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
+        build_image_with_progress(flake_refs, image_ref, verbose)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -194,19 +187,17 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
         return DevboxConfig()
 
     # Load config from each flake directory
-    configs = []
-    for flake_ref in flake_refs:
-        flake_path = Path(flake_ref.path) / "flake.nix"
-        config = find_config(flake_path)
-        # Only add non-default configs
-        if config != DevboxConfig():
-            configs.append(config)
+    configs = [
+        find_config(Path(flake_ref.path) / "flake.nix") for flake_ref in flake_refs
+    ]
+    # Filter out default (empty) configs
+    non_default_configs = [cfg for cfg in configs if cfg != DevboxConfig()]
 
-    if not configs:
+    if not non_default_configs:
         return DevboxConfig()
 
     # Merge all configs
-    return merge_devbox_configs(configs)
+    return merge_devbox_configs(non_default_configs)
 
 
 @cli.command()
@@ -303,17 +294,12 @@ def run(
         if devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
-    # Extract init commands from merged config
-    file_init = config.devbox_config.init if config.devbox_config else None
-    init_commands = file_init.commands if file_init else []
-
     try:
         _ensure_image_exists(
             flake_refs=config.flake_refs,
             image_ref=config.image_ref,
             force_rebuild=config.rebuild,
             verbose=config.verbose,
-            init_commands=init_commands,
         )
         _run_container_with_config(config)
     except DevboxError as exc:
@@ -326,48 +312,38 @@ def _ensure_image_exists(
     image_ref: ImageRef,
     force_rebuild: bool,
     verbose: bool,
-    init_commands: list[str] | None = None,
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
-        build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
+        build_image_with_progress(flake_refs, image_ref, verbose)
         return
 
     if image_exists(image_ref):
         return
 
     click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose, init_commands)
+    build_image_with_progress(flake_refs, image_ref, verbose)
 
 
-def _parse_port_mapping(mapping: str) -> tuple[str, str]:
-    """Parse port mapping 'host:container' into (host_port, full_mapping)."""
-    host_port = _extract_part_by_separator(mapping, ":", 0)
-    return host_port, mapping
+def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]:
+    """Create a parser function that extracts a key and returns (key, original).
 
+    Args:
+        separator: The separator to split on
+        index: Which part to use as the key
 
-def _parse_volume_mapping(mapping: str) -> tuple[str, str]:
-    """Parse volume mapping 'host:container[:opts]' into (container_path, full_mapping)."""
-    container_path = _extract_part_by_separator(mapping, ":", 1)
-    return container_path, mapping
-
-
-def _parse_env_var(env_var: str) -> tuple[str, str]:
-    """Parse env var 'KEY=value' into (key, full_var)."""
-    key = _extract_part_by_separator(env_var, "=", 0)
-    return key, env_var
-
-
-def _parse_tmpfs(tmpfs: str) -> tuple[str, str]:
-    """Parse tmpfs mount '/path[:opts]' into (path, full_spec).
-
-    Examples:
-        /tmp:size=100m,mode=1777 -> ("/tmp", "/tmp:size=100m,mode=1777")
-        /var/cache -> ("/var/cache", "/var/cache")
+    Returns:
+        Parser function suitable for _merge_mappings
     """
-    path = _extract_part_by_separator(tmpfs, ":", 0)
-    return path, tmpfs
+    return lambda value: (_extract_part_by_separator(value, separator, index), value)
+
+
+# Predefined parsers for common mapping types
+_parse_port_mapping = _make_parser(":", 0)  # host:container -> (host, original)
+_parse_volume_mapping = _make_parser(":", 1)  # host:container -> (container, original)
+_parse_env_var = _make_parser("=", 0)  # KEY=value -> (KEY, original)
+_parse_tmpfs = _make_parser(":", 0)  # /path:opts -> (/path, original)
 
 
 def _merge_mappings(
@@ -435,15 +411,12 @@ def _prepare_container_config(
 
     # Auto-inject USER_ID and GROUP_ID to match current user
     # This ensures the container has correct permissions on mounted volumes
-    current_uid = os.getuid()
-    current_gid = os.getgid()
-
-    # Check if USER_ID/GROUP_ID are already set (CLI or config file)
     env_keys = {_parse_env_var(item)[0] for item in merged_env}
+
     if "USER_ID" not in env_keys:
-        merged_env.append(f"USER_ID={current_uid}")
+        merged_env.append(f"USER_ID={os.getuid()}")
     if "GROUP_ID" not in env_keys:
-        merged_env.append(f"GROUP_ID={current_gid}")
+        merged_env.append(f"GROUP_ID={os.getgid()}")
 
     parsed_cmd = shlex.split(config.command) if config.command else None
 
@@ -492,6 +465,32 @@ def _parse_host_path(volume: str) -> str | None:
     return None
 
 
+def _ensure_directory_with_ownership(path: Path) -> None:
+    """Ensure directory exists with current user ownership.
+
+    Creates directory if not exists, or fixes ownership if root-owned.
+    """
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+        return
+
+    if path.stat().st_uid != 0:  # Not root-owned, nothing to fix
+        return
+
+    # Try to change ownership to current user
+    try:
+        shutil.chown(path, user=os.getuid(), group=os.getgid())
+        return
+    except (PermissionError, OSError):
+        pass  # Fall through to chmod fallback
+
+    # Fallback: make directory writable by everyone
+    try:
+        os.chmod(path, PERMISSION_EVERYONE_READ_WRITE_EXECUTE)
+    except (PermissionError, OSError):
+        pass  # Best effort failed, continue anyway
+
+
 def _prepare_host_volumes(volumes: list[str]) -> None:
     """Prepare host directories for volume mounts.
 
@@ -506,53 +505,29 @@ def _prepare_host_volumes(volumes: list[str]) -> None:
     Args:
         volumes: List of volume mappings
     """
-    import os
-    from pathlib import Path
-
     for volume in volumes:
         host_path = _parse_host_path(volume)
         if not host_path:
             continue
 
-        # Expand environment variables
-        expanded = os.path.expandvars(host_path)
-        if expanded.startswith("$"):
+        # Expand ~ and environment variables
+        expanded = os.path.expanduser(os.path.expandvars(host_path))
+        if expanded.startswith(("~", "$")):
+            # Path still contains unexpanded variables, skip to avoid creating
+            # directories with literal '~' or '$' in the name
             continue
 
         try:
             path = Path(expanded)
 
             # Create the mount point directory itself
-            if not path.exists():
-                path.mkdir(parents=True, exist_ok=True)
-            elif path.stat().st_uid == 0:  # root-owned, try to fix
-                try:
-                    import shutil
-
-                    shutil.chown(path, user=os.getuid(), group=os.getgid())
-                except (PermissionError, OSError):
-                    try:
-                        os.chmod(path, 0o777)
-                    except (PermissionError, OSError):
-                        pass
+            _ensure_directory_with_ownership(path)
 
             # Also ensure parent directory exists to prevent Docker from
             # creating it as root in the container
             parent = path.parent
-            if parent and not parent.exists():
-                parent.mkdir(parents=True, exist_ok=True)
-            elif parent and parent.exists() and parent.stat().st_uid == 0:
-                # Parent is root-owned, this will cause permission issues
-                # for sibling directories in container (e.g., /build/.cache)
-                try:
-                    import shutil
-
-                    shutil.chown(parent, user=os.getuid(), group=os.getgid())
-                except (PermissionError, OSError):
-                    try:
-                        os.chmod(parent, 0o777)
-                    except (PermissionError, OSError):
-                        pass
+            if parent:
+                _ensure_directory_with_ownership(parent)
 
         except (OSError, PermissionError):
             pass

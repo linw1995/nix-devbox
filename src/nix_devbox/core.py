@@ -126,10 +126,7 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
 
 def _generate_shell_refs(flake_refs: list[FlakeRef]) -> str:
     """Generate shell references for the shells list."""
-    lines = []
-    for i in range(len(flake_refs)):
-        lines.append(f"      shell{i}")
-    return "\n".join(lines)
+    return "\n".join(f"      shell{i}" for i in range(len(flake_refs)))
 
 
 def _generate_inputs_section(flake_refs: list[FlakeRef]) -> list[str]:
@@ -155,13 +152,10 @@ def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
 def generate_flake(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
-    init_commands: list[str] | None = None,
 ) -> str:
     """Generate flake.nix content from flake references."""
     if not flake_refs:
         raise ValueError("At least one flake reference is required")
-
-    init_commands = init_commands or []
 
     lines = [_FLAKE_HEADER]
     lines.extend(_generate_inputs_section(flake_refs))

@@ -6,6 +6,8 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import click
+
 from .exceptions import BuildError, DockerError
 from .utils import expand_flagged_options
 
@@ -50,18 +52,19 @@ def _run_nix_build(temp_dir: str, verbose: bool) -> None:
     """Run nix build command."""
     cmd = ["nix", "build", "--impure", ".#image"]
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             cwd=temp_dir,
-            capture_output=not verbose,
+            capture_output=True,
             text=True,
             check=True,
         )
+        if verbose and result.stdout:
+            logger.debug("nix build output:\n%s", result.stdout)
     except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr
         error_msg = f"Nix build failed (exit code {exc.returncode})"
-        if stderr:
-            error_msg += f":\n{stderr}"
+        if exc.stderr:
+            error_msg += f":\n{exc.stderr}"
         raise BuildError(error_msg) from exc
 
 
@@ -71,7 +74,7 @@ def _load_docker_image(temp_dir: str) -> None:
     try:
         subprocess.run(["docker", "load", "-i", str(result_path)], check=True)
     except subprocess.CalledProcessError as exc:
-        raise DockerError(f"Docker import failed: {exc}") from exc
+        raise DockerError(f"Docker load failed: {exc}") from exc
 
 
 def image_exists(image_ref: "ImageRef") -> bool:
@@ -149,7 +152,7 @@ def run_container(
     )
 
     if dry_run:
-        print(" ".join(docker_cmd))
+        click.echo(" ".join(docker_cmd))
         return
 
     if verbose:
@@ -215,17 +218,14 @@ def _build_boolean_flags(
     rm: bool, interactive: bool, tty: bool, detach: bool
 ) -> list[str]:
     """Build list of boolean flags for docker run."""
-    # Build flags list conditionally
-    flags: list[str] = []
-    if rm:
-        flags.append("--rm")
-    if interactive:
-        flags.append("-i")
-    if tty:
-        flags.append("-t")
-    if detach:
-        flags.append("-d")
-    return flags
+    # Use list comprehension with conditional expressions for clarity
+    flags = [
+        ("--rm" if rm else None),
+        ("-i" if interactive else None),
+        ("-t" if tty else None),
+        ("-d" if detach else None),
+    ]
+    return [f for f in flags if f is not None]
 
 
 def _build_named_options(

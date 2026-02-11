@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -16,15 +16,6 @@ from .utils import expand_flagged_options
 # Environment variable pattern: $VAR or ${VAR}
 # Does not match $$ (double dollar, which represents literal $)
 _ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}|\$(\w+)")
-
-
-def _get_current_user() -> str:
-    """Get current user in uid:gid format.
-
-    Returns:
-        String in format "uid:gid" for the current process owner.
-    """
-    return f"{os.getuid()}:{os.getgid()}"
 
 
 # Unique placeholder using Unicode private use area characters
@@ -180,15 +171,24 @@ class ResourcesConfig:
 class LoggingConfig:
     """Docker logging configuration."""
 
-    driver: str = DEFAULT_LOG_DRIVER
+    # Use None to indicate "not explicitly set" (will use Docker default)
+    # This allows distinguishing between "not set" and "explicitly set to json-file"
+    driver: str | None = None
     options: dict[str, str] = field(default_factory=dict)
 
     def to_docker_args(self) -> list[str]:
         """Convert logging config to docker run arguments."""
-        args = [f"--log-driver={self.driver}"]
+        args = []
+        # Only set log driver if explicitly configured
+        if self.driver is not None:
+            args.append(f"--log-driver={self.driver}")
         for key, value in self.options.items():
             args.append(f"--log-opt={key}={value}")
         return args
+
+    def _is_driver_explicitly_set(self) -> bool:
+        """Check if driver was explicitly set (not default None)."""
+        return self.driver is not None
 
 
 @dataclass(frozen=True)
@@ -242,40 +242,56 @@ class RunConfig:
         return args
 
 
+def _parse_config(
+    data: dict[str, Any] | None,
+    config_cls: type[Any],
+    **field_overrides: Callable[[Any], Any],
+) -> Any:
+    """Generic config parser with optional field transformations.
+
+    Args:
+        data: Raw configuration dict, or None for defaults
+        config_cls: The config dataclass to instantiate
+        **field_overrides: Field-specific transformations (field_name=callable)
+
+    Returns:
+        Instance of config_cls with parsed values
+    """
+    if data is None:
+        return config_cls()
+
+    # Get dataclass fields
+    dataclass_fields = fields(config_cls)  # type: ignore[arg-type]
+
+    # Apply field-specific transformations
+    kwargs: dict[str, Any] = {}
+    for field_info in dataclass_fields:
+        field_name = field_info.name
+        if field_name in field_overrides and field_name in data:
+            kwargs[field_name] = field_overrides[field_name](data[field_name])
+        elif field_name in data:
+            kwargs[field_name] = data[field_name]
+
+    # Remove None values to let defaults take effect
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+    return config_cls(**kwargs)
+
+
 def _parse_security_config(data: dict[str, Any] | None) -> SecurityConfig:
     """Parse security configuration from dict."""
-    if data is None:
-        return SecurityConfig()
-    return SecurityConfig(
-        read_only=data.get("read_only", False),
-        no_new_privileges=data.get("no_new_privileges", False),
-        cap_drop=data.get("cap_drop", []),
-        cap_add=data.get("cap_add", []),
-    )
+    return _parse_config(data, SecurityConfig)
 
 
 def _parse_resources_config(data: dict[str, Any] | None) -> ResourcesConfig:
     """Parse resources configuration from dict."""
-    if data is None:
-        return ResourcesConfig()
-    cpus = data.get("cpus")
-    if cpus is not None:
-        cpus = str(cpus)
-    return ResourcesConfig(
-        memory=data.get("memory"),
-        cpus=cpus,
-        pids_limit=data.get("pids_limit"),
-    )
+    # cpus must be string (Docker CLI requirement)
+    return _parse_config(data, ResourcesConfig, cpus=str)
 
 
 def _parse_logging_config(data: dict[str, Any] | None) -> LoggingConfig:
     """Parse logging configuration from dict."""
-    if data is None:
-        return LoggingConfig()
-    return LoggingConfig(
-        driver=data.get("driver", DEFAULT_LOG_DRIVER),
-        options=data.get("options", {}),
-    )
+    return _parse_config(data, LoggingConfig)
 
 
 def _parse_run_config(data: dict[str, Any]) -> RunConfig:
@@ -366,12 +382,19 @@ class DevboxConfig:
         )
 
 
-def find_config(flake_path: Path | str) -> DevboxConfig:
-    """Find and load devbox config from flake directory."""
-    flake_path = Path(flake_path)
+def find_config(flake_nix_path: Path | str) -> DevboxConfig:
+    """Find and load devbox config from the directory containing flake.nix.
+
+    Args:
+        flake_nix_path: Path to flake.nix file (config is searched in its parent dir)
+
+    Returns:
+        DevboxConfig from the first found config file, or default if none found
+    """
+    flake_dir = Path(flake_nix_path).parent
 
     for name in CONFIG_FILE_NAMES:
-        config_path = flake_path.parent / name
+        config_path = flake_dir / name
         if config_path.exists():
             return DevboxConfig.from_file(config_path)
 
@@ -427,11 +450,10 @@ def _merge_two_configs(base: DevboxConfig, override: DevboxConfig) -> DevboxConf
     base_run = base.run
     override_run = override.run
 
-    # Merge security config
+    # Merge security config - override takes precedence
     merged_security = SecurityConfig(
-        read_only=override_run.security.read_only or base_run.security.read_only,
-        no_new_privileges=override_run.security.no_new_privileges
-        or base_run.security.no_new_privileges,
+        read_only=override_run.security.read_only,
+        no_new_privileges=override_run.security.no_new_privileges,
         cap_drop=_merge_lists(
             base_run.security.cap_drop, override_run.security.cap_drop
         ),
@@ -452,12 +474,14 @@ def _merge_two_configs(base: DevboxConfig, override: DevboxConfig) -> DevboxConf
     )
 
     # Merge logging config - override takes precedence
+    # If override has explicit driver, use it; otherwise inherit from base
+    merged_driver = (
+        override_run.logging.driver
+        if override_run.logging._is_driver_explicitly_set()
+        else base_run.logging.driver
+    )
     merged_logging = LoggingConfig(
-        driver=(
-            override_run.logging.driver
-            if override_run.logging.driver != DEFAULT_LOG_DRIVER
-            else base_run.logging.driver
-        ),
+        driver=merged_driver,
         options={**base_run.logging.options, **override_run.logging.options},
     )
 

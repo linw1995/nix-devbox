@@ -18,6 +18,7 @@ class ImageRef:
     tag: str
 
     def __str__(self) -> str:
+        """Return image reference as 'name:tag' string."""
         return f"{self.name}:{self.tag}"
 
     @classmethod
@@ -88,4 +89,5 @@ class FlakeRef:
         return cls(path=str(resolved_path), shell=shell)
 
     def __str__(self) -> str:
+        """Return flake reference as 'path#shell' string."""
         return f"{self.path}#{self.shell}"

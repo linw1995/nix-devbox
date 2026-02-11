@@ -20,3 +20,9 @@ packages = ["src/nix_devbox"]
 
 [tool.pdm]
 distribution = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]
