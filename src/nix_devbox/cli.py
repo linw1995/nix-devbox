@@ -27,8 +27,25 @@ if TYPE_CHECKING:
 
 # Constants
 VERSION = "0.1.0"
-DEFAULT_IMAGE = "devbox:latest"
 TEMP_DIR_PREFIX = "nix-devbox."
+
+
+def _get_default_image_name() -> str:
+    """Get default image name based on current directory name.
+
+    Returns:
+        Image name in format 'dirname-dev:latest'
+    """
+    cwd = os.getcwd()
+    dir_name = os.path.basename(cwd)
+    # Sanitize directory name for use as image name
+    # Replace spaces and special characters with hyphens
+    safe_name = "".join(c if c.isalnum() else "-" for c in dir_name).lower()
+    # Remove leading/trailing hyphens and collapse multiple hyphens
+    safe_name = "-".join(filter(None, safe_name.split("-")))
+    if not safe_name:
+        safe_name = "devbox"
+    return f"{safe_name}-dev:latest"
 
 
 @dataclass(frozen=True)
@@ -128,8 +145,8 @@ def cli(ctx: "Context") -> None:
 @click.option(
     "-o",
     "--output",
-    default=DEFAULT_IMAGE,
-    help="Output image name and tag (default: devbox:latest)",
+    default=_get_default_image_name,
+    help="Output image name and tag (default: <dirname>-dev:latest)",
     metavar="name:tag",
 )
 @click.option("-n", "--name", help="Output image name (overrides --output)")
@@ -145,7 +162,9 @@ def build(
     verbose: bool,
 ) -> None:
     """Build Docker image."""
-    image_ref = ImageRef.parse(output, name_override=name, tag_override=tag)
+    # Handle callable default (Click passes the callable when using default=function)
+    actual_output = output() if callable(output) else output
+    image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
     # Load and merge devbox configs to get init commands
@@ -195,8 +214,8 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
 @click.option(
     "-o",
     "--output",
-    default=DEFAULT_IMAGE,
-    help="Image name and tag (default: devbox:latest)",
+    default=_get_default_image_name,
+    help="Image name and tag (default: <dirname>-dev:latest)",
     metavar="name:tag",
 )
 @click.option("-n", "--name", help="Image name (overrides --output)")
@@ -253,13 +272,16 @@ def run(
     command: str | None,
 ) -> None:
     """Run container (auto-builds image if not exists)."""
+    # Handle callable default
+    actual_output = output() if callable(output) else output
+
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
     # Load config from the first flake directory
     devbox_config = _load_devbox_config(flake_refs)
 
     config = ContainerLaunchConfig(
-        image_ref=ImageRef.parse(output, name_override=name, tag_override=tag),
+        image_ref=ImageRef.parse(actual_output, name_override=name, tag_override=tag),
         flake_refs=flake_refs,
         container_name=container_name,
         ports=port,
