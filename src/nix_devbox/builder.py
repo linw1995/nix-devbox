@@ -161,7 +161,17 @@ def run_container(
     try:
         subprocess.run(docker_cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        raise DockerError(f"Failed to run container: {exc}") from exc
+        # For interactive TTY mode, user exiting the shell is normal behavior.
+        # Common exit codes:
+        #   0   - Normal exit (typing 'exit' or ctrl+d)
+        #   1   - General error, but often used by shells on normal exit
+        #   130 - SIGINT (ctrl+c)
+        #   143 - SIGTERM (container terminated gracefully)
+        # Treat these as normal exit, not as failure.
+        if interactive and tty and exc.returncode in (0, 1, 130, 143):
+            pass
+        else:
+            raise DockerError(f"Failed to run container: {exc}") from exc
 
 
 def _build_docker_command(
