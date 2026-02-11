@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import yaml
 
 from .exceptions import ConfigError
-from .utils import expand_flagged_options
+from .utils import expand_flagged_options, extract_part_by_separator
 
 # Environment variable pattern: $VAR or ${VAR}
 # Does not match $$ (double dollar, which represents literal $)
@@ -30,39 +30,32 @@ def _encode_literal_dollar(index: int) -> str:
     return f"{_LITERAL_DOLLAR_PREFIX}{index}{_LITERAL_DOLLAR_SUFFIX}"
 
 
+# Pattern to match literal $$ (double dollar)
+_LITERAL_DOLLAR_PATTERN = re.compile(r"\$\$")
+
+
 def _extract_literal_dollars(value: str) -> tuple[str, list[str]]:
     """Extract literal $$ sequences and return template with placeholders.
 
     Returns:
         Tuple of (template with placeholders, list of literal dollar markers)
     """
-    parts: list[str] = []
     literal_dollars: list[str] = []
-    current_pos = 0
 
-    while current_pos < len(value):
-        is_literal_dollar = (
-            current_pos + 1 < len(value)
-            and value[current_pos : current_pos + 2] == "$$"
-        )
-        if is_literal_dollar:
-            placeholder = _encode_literal_dollar(len(literal_dollars))
-            parts.append(placeholder)
-            literal_dollars.append(placeholder)
-            current_pos += 2
-        else:
-            parts.append(value[current_pos])
-            current_pos += 1
+    def replace_with_placeholder(match: re.Match) -> str:
+        placeholder = _encode_literal_dollar(len(literal_dollars))
+        literal_dollars.append(placeholder)
+        return placeholder
 
-    return "".join(parts), literal_dollars
+    template = _LITERAL_DOLLAR_PATTERN.sub(replace_with_placeholder, value)
+    return template, literal_dollars
 
 
 def _restore_literal_dollars(value: str, placeholders: list[str]) -> str:
     """Restore literal $ characters from placeholders."""
-    result = value
     for placeholder in placeholders:
-        result = result.replace(placeholder, "$")
-    return result
+        value = value.replace(placeholder, "$")
+    return value
 
 
 def _replace_env_var(match: re.Match) -> str:
@@ -242,56 +235,39 @@ class RunConfig:
         return args
 
 
-def _parse_config(
-    data: dict[str, Any] | None,
-    config_cls: type[Any],
-    **field_overrides: Callable[[Any], Any],
-) -> Any:
-    """Generic config parser with optional field transformations.
-
-    Args:
-        data: Raw configuration dict, or None for defaults
-        config_cls: The config dataclass to instantiate
-        **field_overrides: Field-specific transformations (field_name=callable)
-
-    Returns:
-        Instance of config_cls with parsed values
-    """
-    if data is None:
-        return config_cls()
-
-    # Get dataclass fields
-    dataclass_fields = fields(config_cls)  # type: ignore[arg-type]
-
-    # Apply field-specific transformations
-    kwargs: dict[str, Any] = {}
-    for field_info in dataclass_fields:
-        field_name = field_info.name
-        if field_name in field_overrides and field_name in data:
-            kwargs[field_name] = field_overrides[field_name](data[field_name])
-        elif field_name in data:
-            kwargs[field_name] = data[field_name]
-
-    # Remove None values to let defaults take effect
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-
-    return config_cls(**kwargs)
-
-
 def _parse_security_config(data: dict[str, Any] | None) -> SecurityConfig:
     """Parse security configuration from dict."""
-    return _parse_config(data, SecurityConfig)
+    if data is None:
+        return SecurityConfig()
+    return SecurityConfig(
+        read_only=data.get("read_only", False),
+        no_new_privileges=data.get("no_new_privileges", False),
+        cap_drop=data.get("cap_drop", []),
+        cap_add=data.get("cap_add", []),
+    )
 
 
 def _parse_resources_config(data: dict[str, Any] | None) -> ResourcesConfig:
     """Parse resources configuration from dict."""
+    if data is None:
+        return ResourcesConfig()
     # cpus must be string (Docker CLI requirement)
-    return _parse_config(data, ResourcesConfig, cpus=str)
+    cpus = data.get("cpus")
+    return ResourcesConfig(
+        memory=data.get("memory"),
+        cpus=str(cpus) if cpus is not None else None,
+        pids_limit=data.get("pids_limit"),
+    )
 
 
 def _parse_logging_config(data: dict[str, Any] | None) -> LoggingConfig:
     """Parse logging configuration from dict."""
-    return _parse_config(data, LoggingConfig)
+    if data is None:
+        return LoggingConfig()
+    return LoggingConfig(
+        driver=data.get("driver"),
+        options=data.get("options", {}),
+    )
 
 
 def _parse_run_config(data: dict[str, Any]) -> RunConfig:
@@ -368,8 +344,7 @@ class DevboxConfig:
             return cls()
 
         try:
-            with open(path, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
             raise ConfigError(f"Failed to parse config file {path}: {exc}") from exc
 
@@ -530,29 +505,6 @@ def _merge_lists(base: list[str], override: list[str]) -> list[str]:
     return list(dict.fromkeys(base + override))
 
 
-def _extract_part_by_separator(value: str, separator: str, index: int = 0) -> str:
-    """Extract a part from string by separator, with fallback to original value.
-
-    Args:
-        value: The string to split
-        separator: The separator to split on
-        index: Which part to return (0-indexed)
-
-    Returns:
-        The part at index if separator exists and index is valid, else original value
-
-    Examples:
-        >>> _extract_part_by_separator('./host:/container:ro', ':', 1)
-        '/container'
-        >>> _extract_part_by_separator('/tmp:size=100m', ':', 0)
-        '/tmp'
-        >>> _extract_part_by_separator('KEY=value', '=', 0)
-        'KEY'
-    """
-    parts = value.split(separator)
-    return parts[index] if len(parts) > index else value
-
-
 def _extract_volume_container_path(volume: str) -> str:
     """Extract container path from volume specification.
 
@@ -562,7 +514,7 @@ def _extract_volume_container_path(volume: str) -> str:
     Returns:
         Container path (e.g., '/container')
     """
-    return _extract_part_by_separator(volume, ":", 1)
+    return extract_part_by_separator(volume, ":", 1)
 
 
 def _extract_tmpfs_path(tmpfs: str) -> str:
@@ -574,7 +526,7 @@ def _extract_tmpfs_path(tmpfs: str) -> str:
     Returns:
         Mount path (e.g., '/tmp')
     """
-    return _extract_part_by_separator(tmpfs, ":", 0)
+    return extract_part_by_separator(tmpfs, ":", 0)
 
 
 def _extract_port_key(port: str) -> str:
@@ -586,7 +538,7 @@ def _extract_port_key(port: str) -> str:
     Returns:
         Host port (e.g., '8080')
     """
-    return _extract_part_by_separator(port, ":", 0)
+    return extract_part_by_separator(port, ":", 0)
 
 
 def _extract_env_key(env: str) -> str:
@@ -598,7 +550,7 @@ def _extract_env_key(env: str) -> str:
     Returns:
         Variable name (e.g., 'KEY')
     """
-    return _extract_part_by_separator(env, "=", 0)
+    return extract_part_by_separator(env, "=", 0)
 
 
 def _merge_by_key(

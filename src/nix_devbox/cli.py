@@ -4,7 +4,7 @@ import os
 import re
 import shlex
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -15,13 +15,13 @@ from .builder import build_image, image_exists, run_container
 from .config import (
     DevboxConfig,
     RunConfig,
-    _extract_part_by_separator,
     find_config,
     merge_devbox_configs,
 )
 from .core import generate_flake
 from .exceptions import DevboxError
 from .models import FlakeRef, ImageRef
+from .utils import extract_part_by_separator
 
 if TYPE_CHECKING:
     from click import Context
@@ -66,13 +66,13 @@ class ContainerLaunchConfig:
     image_ref: ImageRef
     flake_refs: list[FlakeRef]
     container_name: str | None = None
-    ports: tuple[str, ...] = ()
-    volumes: tuple[str, ...] = ()
-    env: tuple[str, ...] = ()
+    ports: list[str] = field(default_factory=list)
+    volumes: list[str] = field(default_factory=list)
+    env: list[str] = field(default_factory=list)
     workdir: str | None = None
     user: str | None = None
     detach: bool = False
-    no_rm: bool = False
+    rm: bool = True
     rebuild: bool = False
     dry_run: bool = False
     verbose: bool = False
@@ -141,6 +141,27 @@ def cli(ctx: "Context") -> None:
         click.echo(ctx.get_help())
 
 
+def _execute_build(
+    flakes: tuple[str, ...],
+    output: str,
+    name: str | None,
+    tag: str | None,
+    verbose: bool,
+) -> None:
+    """Execute Docker image build with parsed arguments."""
+    actual_output = output() if callable(output) else output
+    image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
+    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
+
+    devbox_config = _load_devbox_config(flake_refs)
+    ensure_dirs = _get_ensure_dirs_from_config(devbox_config)
+
+    if verbose:
+        click.echo(format_flake_refs(flake_refs))
+
+    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
+
+
 @cli.command()
 @click.argument("flakes", nargs=-1, required=True)
 @click.option(
@@ -163,20 +184,8 @@ def build(
     verbose: bool,
 ) -> None:
     """Build Docker image."""
-    # Handle callable default (Click passes the callable when using default=function)
-    actual_output = output() if callable(output) else output
-    image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
-    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
-
-    # Load and merge devbox configs to get ensure_dirs
-    devbox_config = _load_devbox_config(flake_refs)
-    ensure_dirs = _get_ensure_dirs_from_config(devbox_config)
-
-    if verbose:
-        click.echo(format_flake_refs(flake_refs))
-
     try:
-        build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
+        _execute_build(flakes, output, name, tag, verbose)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -209,6 +218,67 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
 
     # Merge all configs
     return merge_devbox_configs(non_default_configs)
+
+
+def _build_launch_config(
+    flakes: tuple[str, ...],
+    output: str,
+    name: str | None,
+    tag: str | None,
+    container_name: str | None,
+    port: tuple[str, ...],
+    volume: tuple[str, ...],
+    env: tuple[str, ...],
+    workdir: str | None,
+    user: str | None,
+    detach: bool,
+    no_rm: bool,
+    rebuild: bool,
+    dry_run: bool,
+    verbose: bool,
+    command: str | None,
+) -> ContainerLaunchConfig:
+    """Build container launch configuration from CLI arguments."""
+    actual_output = output() if callable(output) else output
+    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
+    devbox_config = _load_devbox_config(flake_refs)
+
+    return ContainerLaunchConfig(
+        image_ref=ImageRef.parse(actual_output, name_override=name, tag_override=tag),
+        flake_refs=flake_refs,
+        container_name=container_name,
+        ports=list(port),
+        volumes=list(volume),
+        env=list(env),
+        workdir=workdir,
+        user=user,
+        detach=detach,
+        rm=not no_rm,
+        rebuild=rebuild,
+        dry_run=dry_run,
+        verbose=verbose,
+        command=command,
+        devbox_config=devbox_config,
+    )
+
+
+def _execute_run(config: ContainerLaunchConfig) -> None:
+    """Execute container run with the given configuration."""
+    if config.verbose:
+        click.echo(format_flake_refs(config.flake_refs))
+        if config.devbox_config and config.devbox_config.run.resources.memory:
+            click.echo("Using devbox config from flake directory")
+
+    ensure_dirs = _get_ensure_dirs_from_config(config.devbox_config)
+
+    _ensure_image_exists(
+        flake_refs=config.flake_refs,
+        image_ref=config.image_ref,
+        force_rebuild=config.rebuild,
+        verbose=config.verbose,
+        ensure_dirs=ensure_dirs,
+    )
+    _run_container_with_config(config)
 
 
 @cli.command()
@@ -274,20 +344,14 @@ def run(
     command: str | None,
 ) -> None:
     """Run container (auto-builds image if not exists)."""
-    # Handle callable default
-    actual_output = output() if callable(output) else output
-
-    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
-
-    # Load config from the first flake directory
-    devbox_config = _load_devbox_config(flake_refs)
-
-    config = ContainerLaunchConfig(
-        image_ref=ImageRef.parse(actual_output, name_override=name, tag_override=tag),
-        flake_refs=flake_refs,
+    config = _build_launch_config(
+        flakes=flakes,
+        output=output,
+        name=name,
+        tag=tag,
         container_name=container_name,
-        ports=port,
-        volumes=volume,
+        port=port,
+        volume=volume,
         env=env,
         workdir=workdir,
         user=user,
@@ -297,26 +361,10 @@ def run(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
-        devbox_config=devbox_config,
     )
 
-    if config.verbose:
-        click.echo(format_flake_refs(config.flake_refs))
-        if devbox_config.run.resources.memory:
-            click.echo("Using devbox config from flake directory")
-
-    # Get ensure_dirs from merged config
-    ensure_dirs = _get_ensure_dirs_from_config(config.devbox_config)
-
     try:
-        _ensure_image_exists(
-            flake_refs=config.flake_refs,
-            image_ref=config.image_ref,
-            force_rebuild=config.rebuild,
-            verbose=config.verbose,
-            ensure_dirs=ensure_dirs,
-        )
-        _run_container_with_config(config)
+        _execute_run(config)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -352,7 +400,7 @@ def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]
     Returns:
         Parser function suitable for _merge_mappings
     """
-    return lambda value: (_extract_part_by_separator(value, separator, index), value)
+    return lambda value: (extract_part_by_separator(value, separator, index), value)
 
 
 # Predefined parsers for common mapping types
@@ -364,7 +412,7 @@ _parse_tmpfs = _make_parser(":", 0)  # /path:opts -> (/path, original)
 
 def _merge_mappings(
     base: list[str],
-    overrides: tuple[str, ...],
+    overrides: list[str],
     parse_func: Callable[[str], tuple[str, str]],
 ) -> list[str]:
     """
@@ -422,7 +470,7 @@ def _prepare_container_config(
     )
     merged_env = _merge_mappings(file_config.env, config.env, parse_func=_parse_env_var)
     merged_tmpfs = _merge_mappings(
-        file_config.tmpfs, (), parse_func=_parse_tmpfs  # tmpfs only from config file
+        file_config.tmpfs, [], parse_func=_parse_tmpfs  # tmpfs only from config file
     )
 
     # Auto-inject USER_ID and GROUP_ID to match current user
@@ -440,9 +488,7 @@ def _prepare_container_config(
     # If CLI doesn't specify, use config file value
     # If config file doesn't specify, default to None (entrypoint will handle user switching)
     # The entrypoint starts as root and switches to nixbld automatically
-    merged_user = config.user
-    if merged_user is None:
-        merged_user = file_config.user
+    merged_user = config.user if config.user is not None else file_config.user
     # Note: We no longer default to current user here because the entrypoint
     # handles user switching. Setting -u would prevent entrypoint from using gosu.
 
@@ -459,7 +505,7 @@ def _prepare_container_config(
         "env": merged_env,
         "tmpfs": merged_tmpfs,
         "container_name": config.container_name,
-        "rm": not config.no_rm,
+        "rm": config.rm,
         "interactive": not config.detach,
         "tty": not config.detach,
         "workdir": config.workdir,
@@ -486,24 +532,17 @@ def _collect_parent_dirs(volumes: list[str]) -> list[str]:
     Returns:
         Sorted list of unique parent directory paths (excluding mount points)
     """
-    # First, collect all mount points
-    mount_points: set[str] = set()
-    for volume in volumes:
-        container_path = _extract_container_path(volume)
-        if container_path:
-            mount_points.add(container_path)
+    # Collect all mount points
+    container_paths = filter(None, map(_extract_container_path, volumes))
+    mount_points: set[str] = set(container_paths)
 
-    # Then, collect parent directories, excluding those that are mount points
+    # Collect parent directories, excluding those that are mount points
+    stop_paths = frozenset({"/", ".", "/build"})
     parent_dirs: set[str] = set()
-    for volume in volumes:
-        container_path = _extract_container_path(volume)
-        if not container_path:
-            continue
 
-        # Collect parent directories up to /build
+    for container_path in mount_points:
         path = Path(container_path).parent
-        while str(path) not in ("/", ".") and str(path) != "/build":
-            # Skip if this path is itself a mount point
+        while str(path) not in stop_paths:
             if str(path) not in mount_points:
                 parent_dirs.add(str(path))
             parent = path.parent

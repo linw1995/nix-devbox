@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 # Add null handler to avoid "No handler found" warnings
 logger.addHandler(logging.NullHandler())
 
+# Exit codes treated as normal for interactive TTY containers
+# 0   - Normal exit (typing 'exit' or ctrl+d)
+# 1   - General error, but often used by shells on normal exit
+# 130 - SIGINT (ctrl+c)
+# 143 - SIGTERM (container terminated gracefully)
+_NORMAL_EXIT_CODES = frozenset({0, 1, 130, 143})
+
 
 def build_image(
     flake_content: str,
@@ -62,10 +69,10 @@ def _run_nix_build(temp_dir: str, verbose: bool) -> None:
         if verbose and result.stdout:
             logger.debug("nix build output:\n%s", result.stdout)
     except subprocess.CalledProcessError as exc:
-        error_msg = f"Nix build failed (exit code {exc.returncode})"
-        if exc.stderr:
-            error_msg += f":\n{exc.stderr}"
-        raise BuildError(error_msg) from exc
+        stderr_info = f":\n{exc.stderr}" if exc.stderr else ""
+        raise BuildError(
+            f"Nix build failed (exit code {exc.returncode}){stderr_info}"
+        ) from exc
 
 
 def _load_docker_image(temp_dir: str) -> None:
@@ -161,14 +168,8 @@ def run_container(
     try:
         subprocess.run(docker_cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        # For interactive TTY mode, user exiting the shell is normal behavior.
-        # Common exit codes:
-        #   0   - Normal exit (typing 'exit' or ctrl+d)
-        #   1   - General error, but often used by shells on normal exit
-        #   130 - SIGINT (ctrl+c)
-        #   143 - SIGTERM (container terminated gracefully)
-        # Treat these as normal exit, not as failure.
-        if interactive and tty and exc.returncode in (0, 1, 130, 143):
+        # For interactive TTY mode, user exiting the shell is normal behavior
+        if interactive and tty and exc.returncode in _NORMAL_EXIT_CODES:
             pass
         else:
             raise DockerError(f"Failed to run container: {exc}") from exc
