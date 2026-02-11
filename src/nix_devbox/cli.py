@@ -3,7 +3,6 @@
 import os
 import re
 import shlex
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +29,6 @@ if TYPE_CHECKING:
 
 # Constants
 TEMP_DIR_PREFIX = "nix-devbox."
-PERMISSION_EVERYONE_READ_WRITE_EXECUTE = 0o777  # For directory creation fallback
 
 
 def _sanitize_name_for_docker(value: str) -> str:
@@ -95,6 +93,7 @@ def build_image_with_progress(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
     verbose: bool,
+    ensure_dirs: list[str] | None = None,
 ) -> None:
     """
     Build the Docker image with progress output.
@@ -103,11 +102,12 @@ def build_image_with_progress(
         flake_refs: List of flake references to merge
         image_ref: Target image reference
         verbose: Whether to print verbose output
+        ensure_dirs: Directories to ensure exist in container
 
     Raises:
         DevboxError: If build fails
     """
-    flake_content = generate_flake(flake_refs, image_ref)
+    flake_content = generate_flake(flake_refs, image_ref, ensure_dirs)
 
     with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
         click.echo(f"Building image {image_ref}...")
@@ -168,13 +168,24 @@ def build(
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
+    # Load and merge devbox configs to get ensure_dirs
+    devbox_config = _load_devbox_config(flake_refs)
+    ensure_dirs = _get_ensure_dirs_from_config(devbox_config)
+
     if verbose:
         click.echo(format_flake_refs(flake_refs))
 
     try:
-        build_image_with_progress(flake_refs, image_ref, verbose)
+        build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _get_ensure_dirs_from_config(config: DevboxConfig | None) -> list[str]:
+    """Extract ensure_dirs from merged devbox config."""
+    if config is None or config.init is None:
+        return []
+    return config.init.ensure_dirs
 
 
 def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
@@ -294,12 +305,16 @@ def run(
         if devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
+    # Get ensure_dirs from merged config
+    ensure_dirs = _get_ensure_dirs_from_config(config.devbox_config)
+
     try:
         _ensure_image_exists(
             flake_refs=config.flake_refs,
             image_ref=config.image_ref,
             force_rebuild=config.rebuild,
             verbose=config.verbose,
+            ensure_dirs=ensure_dirs,
         )
         _run_container_with_config(config)
     except DevboxError as exc:
@@ -312,18 +327,19 @@ def _ensure_image_exists(
     image_ref: ImageRef,
     force_rebuild: bool,
     verbose: bool,
+    ensure_dirs: list[str] | None = None,
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
-        build_image_with_progress(flake_refs, image_ref, verbose)
+        build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
         return
 
     if image_exists(image_ref):
         return
 
     click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose)
+    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
 
 
 def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]:
@@ -430,6 +446,12 @@ def _prepare_container_config(
     # Note: We no longer default to current user here because the entrypoint
     # handles user switching. Setting -u would prevent entrypoint from using gosu.
 
+    # Collect parent directories that need ownership fix
+    # These are passed to entrypoint which will handle chown logic
+    parent_dirs = _collect_parent_dirs(merged_volumes)
+    if parent_dirs:
+        merged_env.append(f"DEVBOX_CHOWN_PARENTS={':'.join(parent_dirs)}")
+
     return {
         "command": parsed_cmd,
         "ports": merged_ports,
@@ -449,6 +471,78 @@ def _prepare_container_config(
     }
 
 
+def _collect_parent_dirs(volumes: list[str]) -> list[str]:
+    """Collect parent directories of mounted volumes that need ownership fix.
+
+    These are directories that Docker may have auto-created as root:root.
+    The entrypoint will chown these to the target user (non-recursive).
+
+    Parent directories that are themselves mount points are excluded,
+    as they will be handled by the mount point logic in entrypoint.
+
+    Args:
+        volumes: List of volume mappings like ['/host:/container', ...]
+
+    Returns:
+        Sorted list of unique parent directory paths (excluding mount points)
+    """
+    # First, collect all mount points
+    mount_points: set[str] = set()
+    for volume in volumes:
+        container_path = _extract_container_path(volume)
+        if container_path:
+            mount_points.add(container_path)
+
+    # Then, collect parent directories, excluding those that are mount points
+    parent_dirs: set[str] = set()
+    for volume in volumes:
+        container_path = _extract_container_path(volume)
+        if not container_path:
+            continue
+
+        # Collect parent directories up to /build
+        path = Path(container_path).parent
+        while str(path) not in ("/", ".") and str(path) != "/build":
+            # Skip if this path is itself a mount point
+            if str(path) not in mount_points:
+                parent_dirs.add(str(path))
+            parent = path.parent
+            if parent == path:  # Reached root
+                break
+            path = parent
+
+    # Sort by depth (shorter paths first) for consistent ordering
+    return sorted(parent_dirs, key=lambda p: (p.count("/"), p))
+
+
+def _extract_container_path(volume: str) -> str | None:
+    """Extract container path from volume mapping.
+
+    Args:
+        volume: Volume mapping string (e.g., "/host:/container:rw")
+
+    Returns:
+        Container path or None if not a standard volume mapping
+    """
+    # Handle named volumes and tmpfs differently
+    # Valid bind mount host paths: absolute, relative, env var, or home dir
+    is_bind_mount = (
+        volume.startswith("/")  # absolute path
+        or volume.startswith("./")  # relative path (current dir)
+        or volume.startswith("../")  # relative path (parent dir)
+        or volume.startswith("$")  # environment variable
+        or volume.startswith("~")  # home directory
+    )
+    if not is_bind_mount:
+        return None
+
+    # Extract container path (after first colon, before second colon if exists)
+    parts = volume.split(":")
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
 def _parse_host_path(volume: str) -> str | None:
     """Extract host path from volume mapping.
 
@@ -465,30 +559,14 @@ def _parse_host_path(volume: str) -> str | None:
     return None
 
 
-def _ensure_directory_with_ownership(path: Path) -> None:
-    """Ensure directory exists with current user ownership.
+def _ensure_directory_exists(path: Path) -> None:
+    """Ensure directory exists, creating it if necessary.
 
-    Creates directory if not exists, or fixes ownership if root-owned.
+    Args:
+        path: Directory path to ensure exists
     """
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
-        return
-
-    if path.stat().st_uid != 0:  # Not root-owned, nothing to fix
-        return
-
-    # Try to change ownership to current user
-    try:
-        shutil.chown(path, user=os.getuid(), group=os.getgid())
-        return
-    except (PermissionError, OSError):
-        pass  # Fall through to chmod fallback
-
-    # Fallback: make directory writable by everyone
-    try:
-        os.chmod(path, PERMISSION_EVERYONE_READ_WRITE_EXECUTE)
-    except (PermissionError, OSError):
-        pass  # Best effort failed, continue anyway
 
 
 def _prepare_host_volumes(volumes: list[str]) -> None:
@@ -521,13 +599,13 @@ def _prepare_host_volumes(volumes: list[str]) -> None:
             path = Path(expanded)
 
             # Create the mount point directory itself
-            _ensure_directory_with_ownership(path)
+            _ensure_directory_exists(path)
 
             # Also ensure parent directory exists to prevent Docker from
             # creating it as root in the container
             parent = path.parent
             if parent:
-                _ensure_directory_with_ownership(parent)
+                _ensure_directory_exists(parent)
 
         except (OSError, PermissionError):
             pass

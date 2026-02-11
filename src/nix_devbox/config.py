@@ -324,8 +324,11 @@ def _parse_run_config(data: dict[str, Any]) -> RunConfig:
 class InitConfig:
     """Container initialization configuration (runs on container start)."""
 
+    # Directories to ensure exist (created by root before chown)
+    # Useful for XDG directories that aren't explicitly mounted
+    ensure_dirs: list[str] = field(default_factory=list)
+
     # Commands to run when container starts (before the main command)
-    # Use this to create directories, set permissions, etc.
     # These run as the container user (not root, unless user: "0:0")
     commands: list[str] = field(default_factory=list)
 
@@ -335,6 +338,7 @@ def _parse_init_config(data: dict[str, Any] | None) -> InitConfig:
     if data is None:
         return InitConfig()
     return InitConfig(
+        ensure_dirs=data.get("ensure_dirs", []),
         commands=data.get("commands", []),
     )
 
@@ -500,10 +504,11 @@ def _merge_two_configs(base: DevboxConfig, override: DevboxConfig) -> DevboxConf
         user=_pick_override_or_base(override_run.user, base_run.user),
     )
 
-    # Merge init config - merge commands lists
+    # Merge init config - merge ensure_dirs and commands lists
     base_init = base.init
     override_init = override.init
     merged_init = InitConfig(
+        ensure_dirs=_merge_lists(base_init.ensure_dirs, override_init.ensure_dirs),
         commands=_merge_lists(base_init.commands, override_init.commands),
     )
 
