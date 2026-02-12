@@ -13,23 +13,11 @@ _FLAKE_LET_START = """  let
     pkgs = import nixpkgs { inherit system; };"""
 
 _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
-    # Collect all shells
-    shells = [
-<<SHELL_REFS>>
-    ];
-
     # Create a merged shell derivation
-    allBuildInputs = pkgs.lib.flatten (map (s: s.buildInputs or []) shells);
-    allNativeBuildInputs = pkgs.lib.flatten (map (s: s.nativeBuildInputs or []) shells);
-
-    mergedShellHook = pkgs.lib.concatStringsSep "\\n" (
-      pkgs.lib.filter (x: x != "") (map (s: s.shellHook or "") shells)
-    );
-
     mergedShell = pkgs.mkShell {
-      buildInputs = allBuildInputs;
-      nativeBuildInputs = allNativeBuildInputs;
-      shellHook = mergedShellHook;
+      inputsFrom = [
+<<SHELL_REFS>>
+      ];
     };
 
     # Create entrypoint - use full paths for all commands
