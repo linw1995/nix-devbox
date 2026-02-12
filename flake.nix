@@ -37,7 +37,6 @@
             inputsFrom = [self.packages.${system}.default.devShell];
 
             packages = with pkgs; [
-              python314
               prek
             ];
           };
