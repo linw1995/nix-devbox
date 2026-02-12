@@ -99,6 +99,7 @@ def build_image_with_progress(
     image_ref: ImageRef,
     verbose: bool,
     ensure_dirs: list[str] | None = None,
+    dry_run: bool = False,
 ) -> None:
     """
     Build the Docker image with progress output.
@@ -108,11 +109,25 @@ def build_image_with_progress(
         image_ref: Target image reference
         verbose: Whether to print verbose output
         ensure_dirs: Directories to ensure exist in container
+        dry_run: If True, show flake content without building
 
     Raises:
         DevboxError: If build fails
     """
     flake_content = generate_flake(flake_refs, image_ref, ensure_dirs)
+
+    if dry_run:
+        # Create temp directory without auto-cleanup so user can inspect it
+        temp_dir = tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX)
+        flake_path = Path(temp_dir) / "flake.nix"
+        flake_path.write_text(flake_content)
+
+        click.echo(f"Image name: {image_ref}")
+        click.echo()
+        click.secho("Generated files:", fg="cyan")
+        click.echo(f"  Directory: {temp_dir}")
+        click.echo(f"  Flake:     {flake_path}")
+        return
 
     with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
         click.echo(f"Building image {image_ref}...")
@@ -152,6 +167,7 @@ def _execute_build(
     name: str | None,
     tag: str | None,
     verbose: bool,
+    dry_run: bool = False,
 ) -> None:
     """Execute Docker image build with parsed arguments."""
     actual_output = output() if callable(output) else output
@@ -161,10 +177,10 @@ def _execute_build(
     devbox_config = _load_devbox_config(flake_refs)
     ensure_dirs = _get_ensure_dirs_from_config(devbox_config)
 
-    if verbose:
+    if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
-    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
+    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs, dry_run)
 
 
 @cli.command()
@@ -179,6 +195,9 @@ def _execute_build(
 @click.option("-n", "--name", help="Output image name (overrides --output)")
 @click.option("-t", "--tag", help="Output image tag (overrides --output)")
 @click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
+@click.option(
+    "--dry-run", is_flag=True, help="Show generated flake.nix without building"
+)
 @click.pass_context
 def build(
     ctx: "Context",
@@ -187,10 +206,11 @@ def build(
     name: str | None,
     tag: str | None,
     verbose: bool,
+    dry_run: bool,
 ) -> None:
     """Build Docker image."""
     try:
-        _execute_build(flakes, output, name, tag, verbose)
+        _execute_build(flakes, output, name, tag, verbose, dry_run)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
 
