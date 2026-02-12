@@ -1,35 +1,40 @@
-# nix-devbox 运行时配置
-# 为交互式开发环境 (devshell) 推荐的 docker run 参数
+# nix-devbox runtime configuration
+# Recommended docker run parameters for interactive development environment (devshell)
 
 run:
-  # 安全选项（开发环境可适当放宽）
+  # Security options
   security:
-    # 只读根文件系统（devshell 通常需要写 /tmp 等目录，建议关闭）
+    # Read-only root filesystem (devshell typically needs to write to /tmp, etc., recommend disabling)
     read_only: false
-    # 禁止提升权限（建议启用，增加安全性）
+    # Prevent privilege escalation (recommended to enable for security)
     no_new_privileges: true
-    # 丢弃所有 Linux 能力（最小权限原则）
+    # ⚠️ Warning: cap_drop: ALL removes all Linux capabilities, including those required for interactive shell
+    # For interactive shell (docker run -it), you must add the following cap_add:
+    # - SETGID/SETUID: switch user
+    # - SYS_TTY_CONFIG: configure tty device
+    # - KILL: send signals to processes
     cap_drop:
       - "ALL"
-    # 保留切换用户所需的能力（entrypoint 用 gosu 切换到 nixbld）
     cap_add:
-      - "SETUID"
       - "SETGID"
+      - "SETUID"
+      - "SYS_TTY_CONFIG"
+      - "KILL"
 
-  # 资源限制（开发环境建议设置，防止资源泄漏拖垮宿主机）
+  # Resource limits (recommended for development environments to prevent resource leaks)
   resources:
     memory: "1g"
     cpus: "2.0"
     pids_limit: 100
 
-  # 日志配置（防止日志文件无限增长）
+  # Logging configuration (prevent unlimited log growth)
   logging:
     driver: "json-file"
     options:
       max-size: "10m"
       max-file: "3"
 
-  # 默认环境变量
+  # Default environment variables
   env:
     - TERM=xterm-256color
     - EDITOR=nvim
@@ -37,12 +42,3 @@ run:
     - XDG_DATA_HOME=/build/.local/share
     - XDG_CACHE_HOME=/build/.cache
     - XDG_STATE_HOME=/build/.local/state
-
-# 容器初始化配置
-init:
-  # 确保 XDG 目录存在（entrypoint 会以 root 创建并 chown 给目标用户）
-  ensure_dirs:
-    - /build/.config
-    - /build/.cache
-    - /build/.local/share
-    - /build/.local/state

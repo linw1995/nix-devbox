@@ -31,11 +31,11 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         exit 1
       fi
 
+      # Run as the same uid/gid used during build
       if [ $# -eq 0 ]; then
-        exec ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
+        exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
       else
-        export BASH_ENV="$rcfile"
-        exec "$@"
+        exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> "$@"
       fi
     '';
 
@@ -44,8 +44,8 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
       drv = mergedShell;
       name = "<<NAME>>-base";
       tag = "<<TAG>>";
-      uid = 1000;
-      gid = 100;
+      uid = <<UID>>;
+      gid = <<GID>>;
       homeDirectory = "/build";
     };
 
@@ -57,7 +57,7 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
       name = "<<NAME>>";
       tag = "<<TAG>>";
       fromImage = baseImage;
-      contents = [ entrypoint ];
+      contents = [ entrypoint pkgs.gosu ];
       config = {
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
@@ -114,6 +114,12 @@ def generate_flake(
 
     lines.extend(_generate_shell_definitions(flake_refs))
 
+    # Get UID/GID from current runtime environment
+    import os as _os
+
+    uid = str(_os.getuid())
+    gid = str(_os.getgid())
+
     # Use string replace instead of format to avoid escaping issues
     image_package = _FLAKE_IMAGE_PACKAGE_TEMPLATE
     image_package = image_package.replace(
@@ -121,6 +127,8 @@ def generate_flake(
     )
     image_package = image_package.replace("<<NAME>>", image_ref.name)
     image_package = image_package.replace("<<TAG>>", image_ref.tag)
+    image_package = image_package.replace("<<UID>>", uid)
+    image_package = image_package.replace("<<GID>>", gid)
 
     lines.append(image_package)
 

@@ -10,6 +10,13 @@ from nix_devbox.core import generate_flake
 from nix_devbox.models import FlakeRef, ImageRef
 
 
+@pytest.fixture(autouse=True)
+def set_uid_gid_env(monkeypatch):
+    """Set NIX_DEVBOX_UID and NIX_DEVBOX_GID for all tests."""
+    monkeypatch.setenv("NIX_DEVBOX_UID", "1000")
+    monkeypatch.setenv("NIX_DEVBOX_GID", "100")
+
+
 class TestFlakeGeneration:
     """Tests for flake.nix generation."""
 

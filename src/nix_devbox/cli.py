@@ -112,6 +112,9 @@ def build_image_with_progress(
     Raises:
         DevboxError: If build fails
     """
+    # Set UID/GID for flake generation (from environment or current user)
+    os.environ["NIX_DEVBOX_UID"] = os.getenv("NIX_DEVBOX_UID", str(os.getuid()))
+    os.environ["NIX_DEVBOX_GID"] = os.getenv("NIX_DEVBOX_GID", str(os.getgid()))
     flake_content = generate_flake(flake_refs, image_ref)
 
     if dry_run:
@@ -487,6 +490,13 @@ def _prepare_container_config(
     merged_tmpfs = _merge_mappings(
         file_config.tmpfs, [], parse_func=_parse_tmpfs  # tmpfs only from config file
     )
+
+    # Auto-inject USER_ID and GROUP_ID for entrypoint to use
+    env_keys = {_parse_env_var(item)[0] for item in merged_env}
+    if "USER_ID" not in env_keys:
+        merged_env.append(f"USER_ID={os.getuid()}")
+    if "GROUP_ID" not in env_keys:
+        merged_env.append(f"GROUP_ID={os.getgid()}")
 
     parsed_cmd = shlex.split(config.command) if config.command else None
     merged_user = config.user if config.user is not None else file_config.user
