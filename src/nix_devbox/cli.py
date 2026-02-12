@@ -98,7 +98,6 @@ def build_image_with_progress(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
     verbose: bool,
-    ensure_dirs: list[str] | None = None,
     dry_run: bool = False,
 ) -> None:
     """
@@ -108,13 +107,12 @@ def build_image_with_progress(
         flake_refs: List of flake references to merge
         image_ref: Target image reference
         verbose: Whether to print verbose output
-        ensure_dirs: Directories to ensure exist in container
         dry_run: If True, show flake content without building
 
     Raises:
         DevboxError: If build fails
     """
-    flake_content = generate_flake(flake_refs, image_ref, ensure_dirs)
+    flake_content = generate_flake(flake_refs, image_ref)
 
     if dry_run:
         # Create temp directory without auto-cleanup so user can inspect it
@@ -174,13 +172,10 @@ def _execute_build(
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
     flake_refs = [FlakeRef.parse(ref) for ref in flakes]
 
-    devbox_config = _load_devbox_config(flake_refs)
-    ensure_dirs = _get_ensure_dirs_from_config(devbox_config)
-
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
-    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs, dry_run)
+    build_image_with_progress(flake_refs, image_ref, verbose, dry_run)
 
 
 @cli.command()
@@ -213,13 +208,6 @@ def build(
         _execute_build(flakes, output, name, tag, verbose, dry_run)
     except DevboxError as exc:
         raise click.ClickException(str(exc)) from exc
-
-
-def _get_ensure_dirs_from_config(config: DevboxConfig | None) -> list[str]:
-    """Extract ensure_dirs from merged devbox config."""
-    if config is None or config.init is None:
-        return []
-    return config.init.ensure_dirs
 
 
 def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
@@ -294,14 +282,11 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
         if config.devbox_config and config.devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
-    ensure_dirs = _get_ensure_dirs_from_config(config.devbox_config)
-
     _ensure_image_exists(
         flake_refs=config.flake_refs,
         image_ref=config.image_ref,
         force_rebuild=config.rebuild,
         verbose=config.verbose,
-        ensure_dirs=ensure_dirs,
     )
     _run_container_with_config(config)
 
@@ -400,19 +385,18 @@ def _ensure_image_exists(
     image_ref: ImageRef,
     force_rebuild: bool,
     verbose: bool,
-    ensure_dirs: list[str] | None = None,
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
-        build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
+        build_image_with_progress(flake_refs, image_ref, verbose)
         return
 
     if image_exists(image_ref):
         return
 
     click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose, ensure_dirs)
+    build_image_with_progress(flake_refs, image_ref, verbose)
 
 
 def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]:
@@ -504,30 +488,8 @@ def _prepare_container_config(
         file_config.tmpfs, [], parse_func=_parse_tmpfs  # tmpfs only from config file
     )
 
-    # Auto-inject USER_ID and GROUP_ID to match current user
-    # This ensures the container has correct permissions on mounted volumes
-    env_keys = {_parse_env_var(item)[0] for item in merged_env}
-
-    if "USER_ID" not in env_keys:
-        merged_env.append(f"USER_ID={os.getuid()}")
-    if "GROUP_ID" not in env_keys:
-        merged_env.append(f"GROUP_ID={os.getgid()}")
-
     parsed_cmd = shlex.split(config.command) if config.command else None
-
-    # User: CLI takes precedence over config file
-    # If CLI doesn't specify, use config file value
-    # If config file doesn't specify, default to None (entrypoint will handle user switching)
-    # The entrypoint starts as root and switches to nixbld automatically
     merged_user = config.user if config.user is not None else file_config.user
-    # Note: We no longer default to current user here because the entrypoint
-    # handles user switching. Setting -u would prevent entrypoint from using gosu.
-
-    # Collect parent directories that need ownership fix
-    # These are passed to entrypoint which will handle chown logic
-    parent_dirs = _collect_parent_dirs(merged_volumes)
-    if parent_dirs:
-        merged_env.append(f"DEVBOX_CHOWN_PARENTS={':'.join(parent_dirs)}")
 
     return {
         "command": parsed_cmd,
@@ -548,160 +510,9 @@ def _prepare_container_config(
     }
 
 
-def _collect_parent_dirs(volumes: list[str]) -> list[str]:
-    """Collect parent directories of mounted volumes that need ownership fix.
-
-    These are directories that Docker may have auto-created as root:root.
-    The entrypoint will chown these to the target user (non-recursive).
-
-    Parent directories that are themselves mount points are excluded,
-    as they will be handled by the mount point logic in entrypoint.
-
-    Args:
-        volumes: List of volume mappings like ['/host:/container', ...]
-
-    Returns:
-        Sorted list of unique parent directory paths (excluding mount points)
-    """
-    # Collect all mount points
-    container_paths = filter(None, map(_extract_container_path, volumes))
-    mount_points: set[str] = set(container_paths)
-
-    # Collect parent directories, excluding those that are mount points
-    stop_paths = frozenset({"/", ".", "/build", DEFAULT_WORKDIR})
-    parent_dirs: set[str] = set()
-
-    for container_path in mount_points:
-        path = Path(container_path).parent
-        while str(path) not in stop_paths:
-            if str(path) not in mount_points:
-                parent_dirs.add(str(path))
-            parent = path.parent
-            if parent == path:  # Reached root
-                break
-            path = parent
-
-    # Sort by depth (shorter paths first) for consistent ordering
-    return sorted(parent_dirs, key=lambda p: (p.count("/"), p))
-
-
-def _extract_container_path(volume: str) -> str | None:
-    """Extract container path from volume mapping.
-
-    Args:
-        volume: Volume mapping string (e.g., "/host:/container:rw")
-
-    Returns:
-        Container path or None if not a standard volume mapping
-    """
-    # Handle named volumes and tmpfs differently
-    # Valid bind mount host paths: absolute, relative, env var, or home dir
-    is_bind_mount = (
-        volume.startswith("/")  # absolute path
-        or volume.startswith("./")  # relative path (current dir)
-        or volume.startswith("../")  # relative path (parent dir)
-        or volume.startswith("$")  # environment variable
-        or volume.startswith("~")  # home directory
-    )
-    if not is_bind_mount:
-        return None
-
-    # Extract container path (after first colon, before second colon if exists)
-    parts = volume.split(":")
-    if len(parts) < 2:
-        return None
-    return parts[1]
-
-
-def _parse_host_path(volume: str) -> str | None:
-    """Extract host path from volume mapping.
-
-    Args:
-        volume: Volume mapping string (e.g., "/host:/container:rw")
-
-    Returns:
-        Host path or None if not a bind mount
-    """
-    # Extract host path (before first colon)
-    host_path = volume.split(":")[0]
-
-    # Valid bind mount host paths: absolute, relative, env var, or home dir
-    is_bind_mount = (
-        host_path.startswith("/")  # absolute path
-        or host_path == "."  # current dir
-        or host_path.startswith("./")  # relative path (current dir)
-        or host_path == ".."  # parent dir
-        or host_path.startswith("../")  # relative path (parent dir)
-        or host_path.startswith("$")  # environment variable
-        or host_path.startswith("~")  # home directory
-    )
-    if not is_bind_mount:
-        return None
-
-    return host_path
-
-
-def _ensure_directory_exists(path: Path) -> None:
-    """Ensure directory exists, creating it if necessary.
-
-    Args:
-        path: Directory path to ensure exists
-    """
-    if not path.exists():
-        path.mkdir(parents=True, exist_ok=True)
-
-
-def _prepare_host_volumes(volumes: list[str]) -> None:
-    """Prepare host directories for volume mounts.
-
-    This ensures both the mount point and its parent directories exist on the host
-    with correct permissions. When Docker creates missing directories, they become
-    root-owned, which prevents container users from creating sibling directories.
-
-    For example, mounting host:~/.config/app:/build/.config/app requires:
-    - ~/.config/app to exist (mount point)
-    - ~/.config to exist (parent, so Docker doesn't create /build/.config as root)
-
-    Args:
-        volumes: List of volume mappings
-    """
-    for volume in volumes:
-        host_path = _parse_host_path(volume)
-        if not host_path:
-            continue
-
-        # Expand ~ and environment variables
-        expanded = os.path.expanduser(os.path.expandvars(host_path))
-        if expanded.startswith(("~", "$")):
-            # Path still contains unexpanded variables, skip to avoid creating
-            # directories with literal '~' or '$' in the name
-            continue
-
-        try:
-            path = Path(expanded)
-
-            # Create the mount point directory itself
-            _ensure_directory_exists(path)
-
-            # Also ensure parent directory exists to prevent Docker from
-            # creating it as root in the container
-            parent = path.parent
-            if parent:
-                _ensure_directory_exists(parent)
-
-        except (OSError, PermissionError) as exc:
-            # Log but don't fail - Docker may still work if directory exists
-            # or user might have permission to create it in the container
-            logger.debug("Could not create directory %s: %s", expanded, exc)
-
-
 def _run_container_with_config(config: ContainerLaunchConfig) -> None:
     """Run container with the specified configuration."""
     run_kwargs = _prepare_container_config(config)
-
-    # Prepare host volumes (create directories, fix permissions)
-    if not config.dry_run:
-        _prepare_host_volumes(run_kwargs.get("volumes", []))
 
     if config.dry_run:
         click.echo("Commands to be executed:")

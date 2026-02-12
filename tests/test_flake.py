@@ -26,17 +26,6 @@ class TestFlakeGeneration:
         assert 'tag = "latest"' in flake_content  # Image tag
         assert "/path/to/project" in flake_content
 
-    def test_flake_with_ensure_dirs(self):
-        """Test flake generation with ensure_dirs."""
-        flake_refs = [FlakeRef.parse("/path/to/project")]
-        image_ref = ImageRef.parse("test:latest")
-        ensure_dirs = ["/build/.config", "/build/.cache"]
-
-        flake_content = generate_flake(flake_refs, image_ref, ensure_dirs)
-
-        assert "/build/.config" in flake_content
-        assert "/build/.cache" in flake_content
-
     def test_multiple_flake_refs(self):
         """Test flake generation with multiple flake references."""
         flake_refs = [
@@ -52,16 +41,17 @@ class TestFlakeGeneration:
         assert "proj0" in flake_content
         assert "proj1" in flake_content
 
-    def test_flake_no_ensure_dirs(self):
-        """Test flake generation without ensure_dirs defaults to /build and /workspace."""
+    def test_flake_generation(self):
+        """Test basic flake generation."""
         flake_refs = [FlakeRef.parse("/path/to/project")]
         image_ref = ImageRef.parse("test:latest")
 
         flake_content = generate_flake(flake_refs, image_ref)
 
-        # /build and /workspace should always be present
-        assert '"/build"' in flake_content
-        assert '"/workspace"' in flake_content
+        # Verify basic structure
+        assert "inputs = {" in flake_content
+        assert "outputs = {" in flake_content
+        assert "buildNixShellImage" in flake_content
 
 
 @pytest.mark.skipif(
@@ -78,12 +68,8 @@ class TestFlakeSyntax:
         """
         flake_refs = [FlakeRef.parse("/tmp/test-project")]
         image_ref = ImageRef.parse("test:latest")
-        ensure_dirs = ["/build/.config", "/workspace/.config"]
 
-        flake_content = generate_flake(flake_refs, image_ref, ensure_dirs)
-
-        assert "/build/.config" in flake_content
-        assert "/workspace/.config" in flake_content
+        flake_content = generate_flake(flake_refs, image_ref)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             flake_path = Path(tmp_dir) / "flake.nix"

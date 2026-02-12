@@ -33,62 +33,8 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
     };
 
     # Create entrypoint - use full paths for all commands
-    # Uses buildNixShellImage's rcfile (finds it in /nix/store)
     entrypoint = pkgs.writeShellScriptBin "entrypoint" ''
       set -e
-
-      # Get target UID/GID from environment (defaults to 1000:100)
-      TARGET_UID="''${USER_ID:-1000}"
-      TARGET_GID="''${GROUP_ID:-100}"
-
-      # Ensure configured directories exist
-      # These are directories that may not be explicitly mounted but are needed
-      for dir in <<ENSURE_DIRS>>; do
-        ${pkgs.coreutils}/bin/mkdir -p "$dir" 2>/dev/null || true
-      done
-
-      # Fix ownership of parent directories passed from cli.py
-      # These are non-mounted directories that Docker may have auto-created as root
-      CHOWN_PARENTS="''${DEVBOX_CHOWN_PARENTS:-}"
-      if [ -n "$CHOWN_PARENTS" ]; then
-        echo "$CHOWN_PARENTS" | tr ':' '\n' | while read -r path; do
-          if [ -n "$path" ] && [ -d "$path" ]; then
-            ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" "$path" 2>/dev/null || true
-          fi
-        done
-      fi
-
-      # Fix ownership of mount points under /build (home directory)
-      # Try to chown all directories under /build, but only succeed for
-      # Docker-created directories (root-owned) or when we have permission
-      for path in /build /build/* /build/*/*; do
-        [ -e "$path" ] || continue
-        # Attempt chown - if it fails (e.g., bind-mounted from host), that's fine
-        ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" "$path" 2>/dev/null || true
-      done
-
-      # Always ensure /build itself is owned by target user
-      ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" /build 2>/dev/null || true
-
-      # Fix ownership of mount points under /workspace (working directory)
-      # Try to chown all directories under /workspace, but only succeed for
-      # Docker-created directories (root-owned) or when we have permission
-      for path in /workspace /workspace/* /workspace/*/*; do
-        [ -e "$path" ] || continue
-        # Attempt chown - if it fails (e.g., bind-mounted from host), that's fine
-        ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" "$path" 2>/dev/null || true
-      done
-
-      # Always ensure /workspace itself is owned by target user
-      ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" /workspace 2>/dev/null || true
-
-      # Ensure target user exists in /etc/passwd and /etc/group
-      if ! ${pkgs.gnugrep}/bin/grep -q "^nixbld:" /etc/group 2>/dev/null; then
-        echo "nixbld:x:$TARGET_GID:" >> /etc/group
-      fi
-      if ! ${pkgs.gnugrep}/bin/grep -q "^nixbld:" /etc/passwd 2>/dev/null; then
-        echo "nixbld:x:$TARGET_UID:$TARGET_GID::/build:/bin/bash" >> /etc/passwd
-      fi
 
       # Find buildNixShellImage's rcfile
       rcfile=$(${pkgs.coreutils}/bin/ls /nix/store/*-nix-shell-rc 2>/dev/null | ${pkgs.coreutils}/bin/head -1)
@@ -97,13 +43,11 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         exit 1
       fi
 
-      # Run as target user
       if [ $# -eq 0 ]; then
-        exec ${pkgs.gosu}/bin/gosu "$TARGET_UID:$TARGET_GID" ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
+        exec ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
       else
-        # Execute command with rcfile sourced via BASH_ENV
         export BASH_ENV="$rcfile"
-        exec ${pkgs.gosu}/bin/gosu "$TARGET_UID:$TARGET_GID" "$@"
+        exec "$@"
       fi
     '';
 
@@ -125,21 +69,11 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
       name = "<<NAME>>";
       tag = "<<TAG>>";
       fromImage = baseImage;
-      contents = [
-        entrypoint
-        pkgs.gosu
-        pkgs.gnugrep
-      ];
+      contents = [ entrypoint ];
       config = {
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
-        User = "root";
         WorkingDir = "/workspace";
-        Env = [
-          "HOME=/build"
-          "USER_ID=1000"
-          "GROUP_ID=100"
-        ];
       };
     };
   in {
@@ -176,17 +110,10 @@ def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
 def generate_flake(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
-    ensure_dirs: list[str] | None = None,
 ) -> str:
     """Generate flake.nix content from flake references."""
     if not flake_refs:
         raise ValueError("At least one flake reference is required")
-
-    # Default directories to ensure exist
-    default_dirs = ["/build", "/workspace"]
-    ensure_dirs = ensure_dirs or []
-    all_dirs = default_dirs + ensure_dirs
-    dirs_str = " ".join(f'"{d}"' for d in all_dirs)
 
     lines = [_FLAKE_HEADER]
     lines.extend(_generate_inputs_section(flake_refs))
@@ -206,7 +133,6 @@ def generate_flake(
     )
     image_package = image_package.replace("<<NAME>>", image_ref.name)
     image_package = image_package.replace("<<TAG>>", image_ref.tag)
-    image_package = image_package.replace("<<ENSURE_DIRS>>", dirs_str)
 
     lines.append(image_package)
 
