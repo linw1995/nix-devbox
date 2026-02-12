@@ -179,7 +179,7 @@ class LoggingConfig:
             args.append(f"--log-opt={key}={value}")
         return args
 
-    def _is_driver_explicitly_set(self) -> bool:
+    def is_driver_explicitly_set(self) -> bool:
         """Check if driver was explicitly set (not default None)."""
         return self.driver is not None
 
@@ -456,7 +456,7 @@ def _merge_two_configs(base: DevboxConfig, override: DevboxConfig) -> DevboxConf
     # If override has explicit driver, use it; otherwise inherit from base
     merged_driver = (
         override_run.logging.driver
-        if override_run.logging._is_driver_explicitly_set()
+        if override_run.logging.is_driver_explicitly_set()
         else base_run.logging.driver
     )
     merged_logging = LoggingConfig(

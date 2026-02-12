@@ -58,7 +58,7 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         done
       fi
 
-      # Fix ownership of mount points under /build
+      # Fix ownership of mount points under /build (home directory)
       # Try to chown all directories under /build, but only succeed for
       # Docker-created directories (root-owned) or when we have permission
       for path in /build /build/* /build/*/*; do
@@ -69,6 +69,18 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
 
       # Always ensure /build itself is owned by target user
       ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" /build 2>/dev/null || true
+
+      # Fix ownership of mount points under /workspace (working directory)
+      # Try to chown all directories under /workspace, but only succeed for
+      # Docker-created directories (root-owned) or when we have permission
+      for path in /workspace /workspace/* /workspace/*/*; do
+        [ -e "$path" ] || continue
+        # Attempt chown - if it fails (e.g., bind-mounted from host), that's fine
+        ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" "$path" 2>/dev/null || true
+      done
+
+      # Always ensure /workspace itself is owned by target user
+      ${pkgs.coreutils}/bin/chown "$TARGET_UID:$TARGET_GID" /workspace 2>/dev/null || true
 
       # Ensure target user exists in /etc/passwd and /etc/group
       if ! ${pkgs.gnugrep}/bin/grep -q "^nixbld:" /etc/group 2>/dev/null; then
@@ -122,7 +134,7 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
         User = "root";
-        WorkingDir = "/build";
+        WorkingDir = "/workspace";
         Env = [
           "HOME=/build"
           "USER_ID=1000"
@@ -171,7 +183,7 @@ def generate_flake(
         raise ValueError("At least one flake reference is required")
 
     # Default directories to ensure exist
-    default_dirs = ["/build"]
+    default_dirs = ["/build", "/workspace"]
     ensure_dirs = ensure_dirs or []
     all_dirs = default_dirs + ensure_dirs
     dirs_str = " ".join(f'"{d}"' for d in all_dirs)

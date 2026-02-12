@@ -9,6 +9,9 @@ DEFAULT_TAG = "latest"
 DEFAULT_SHELL_ATTR = "devShells.${system}.default"
 DEVSHELLS_PREFIX = "devShells."
 
+# Default container paths
+DEFAULT_WORKDIR = "/workspace"
+
 
 @dataclass(frozen=True)
 class ImageRef:

@@ -138,3 +138,25 @@ class TestCollectParentDirs:
         # Filter to only get the ones we expect
         filtered = [p for p in result if p in expected_order]
         assert filtered == expected_order
+
+    def test_workspace_stop_point(self):
+        """/workspace should be a stop point like /build."""
+        volumes = ["/host:/workspace/.config/app"]
+        result = _collect_parent_dirs(volumes)
+        assert "/workspace/.config" in result
+        assert "/workspace" not in result  # /workspace is the stop point
+
+    def test_build_and_workspace_independent(self):
+        """/build and /workspace should be independent stop points."""
+        volumes = [
+            "/host1:/build/.config/app",
+            "/host2:/workspace/project",
+        ]
+        result = _collect_parent_dirs(volumes)
+        # /build paths
+        assert "/build/.config" in result
+        assert "/build" not in result
+        # /workspace paths
+        assert (
+            "/workspace" not in result
+        )  # /workspace is stop point, no parent to collect

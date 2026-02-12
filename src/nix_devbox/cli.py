@@ -1,5 +1,6 @@
 """CLI interface using Click."""
 
+import logging
 import os
 import re
 import shlex
@@ -20,7 +21,7 @@ from .config import (
 )
 from .core import generate_flake
 from .exceptions import DevboxError
-from .models import FlakeRef, ImageRef
+from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef
 from .utils import extract_part_by_separator
 
 if TYPE_CHECKING:
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
 
 # Constants
 TEMP_DIR_PREFIX = "nix-devbox."
+
+# Module logger
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 def _sanitize_name_for_docker(value: str) -> str:
@@ -465,8 +470,14 @@ def _prepare_container_config(
     merged_ports = _merge_mappings(
         file_config.ports, config.ports, parse_func=_parse_port_mapping
     )
+    # Add default volume mount (current directory -> /workspace)
+    default_volumes = [f"{os.getcwd()}:{DEFAULT_WORKDIR}"]
     merged_volumes = _merge_mappings(
-        file_config.volumes, config.volumes, parse_func=_parse_volume_mapping
+        file_config.volumes, default_volumes, parse_func=_parse_volume_mapping
+    )
+    # Apply CLI volume overrides
+    merged_volumes = _merge_mappings(
+        merged_volumes, config.volumes, parse_func=_parse_volume_mapping
     )
     merged_env = _merge_mappings(file_config.env, config.env, parse_func=_parse_env_var)
     merged_tmpfs = _merge_mappings(
@@ -537,7 +548,7 @@ def _collect_parent_dirs(volumes: list[str]) -> list[str]:
     mount_points: set[str] = set(container_paths)
 
     # Collect parent directories, excluding those that are mount points
-    stop_paths = frozenset({"/", ".", "/build"})
+    stop_paths = frozenset({"/", ".", "/build", DEFAULT_WORKDIR})
     parent_dirs: set[str] = set()
 
     for container_path in mount_points:
@@ -591,11 +602,23 @@ def _parse_host_path(volume: str) -> str | None:
     Returns:
         Host path or None if not a bind mount
     """
-    # Handle named volumes and tmpfs differently
-    if volume.startswith("/") or volume.startswith("$") or volume.startswith("~"):
-        # Bind mount - extract host path (before first colon)
-        return volume.split(":")[0]
-    return None
+    # Extract host path (before first colon)
+    host_path = volume.split(":")[0]
+
+    # Valid bind mount host paths: absolute, relative, env var, or home dir
+    is_bind_mount = (
+        host_path.startswith("/")  # absolute path
+        or host_path == "."  # current dir
+        or host_path.startswith("./")  # relative path (current dir)
+        or host_path == ".."  # parent dir
+        or host_path.startswith("../")  # relative path (parent dir)
+        or host_path.startswith("$")  # environment variable
+        or host_path.startswith("~")  # home directory
+    )
+    if not is_bind_mount:
+        return None
+
+    return host_path
 
 
 def _ensure_directory_exists(path: Path) -> None:
@@ -646,8 +669,10 @@ def _prepare_host_volumes(volumes: list[str]) -> None:
             if parent:
                 _ensure_directory_exists(parent)
 
-        except (OSError, PermissionError):
-            pass
+        except (OSError, PermissionError) as exc:
+            # Log but don't fail - Docker may still work if directory exists
+            # or user might have permission to create it in the container
+            logger.debug("Could not create directory %s: %s", expanded, exc)
 
 
 def _run_container_with_config(config: ContainerLaunchConfig) -> None:
