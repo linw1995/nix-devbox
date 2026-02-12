@@ -99,6 +99,7 @@ def build_image_with_progress(
     image_ref: ImageRef,
     verbose: bool,
     dry_run: bool = False,
+    mount_points: list[str] | None = None,
 ) -> None:
     """
     Build the Docker image with progress output.
@@ -108,6 +109,7 @@ def build_image_with_progress(
         image_ref: Target image reference
         verbose: Whether to print verbose output
         dry_run: If True, show flake content without building
+        mount_points: List of directories to create in image for volume mounts
 
     Raises:
         DevboxError: If build fails
@@ -115,7 +117,7 @@ def build_image_with_progress(
     # Set UID/GID for flake generation (from environment or current user)
     os.environ["NIX_DEVBOX_UID"] = os.getenv("NIX_DEVBOX_UID", str(os.getuid()))
     os.environ["NIX_DEVBOX_GID"] = os.getenv("NIX_DEVBOX_GID", str(os.getgid()))
-    flake_content = generate_flake(flake_refs, image_ref)
+    flake_content = generate_flake(flake_refs, image_ref, mount_points)
 
     if dry_run:
         # Create temp directory without auto-cleanup so user can inspect it
@@ -169,6 +171,7 @@ def _execute_build(
     tag: str | None,
     verbose: bool,
     dry_run: bool = False,
+    mount_points: list[str] | None = None,
 ) -> None:
     """Execute Docker image build with parsed arguments."""
     actual_output = output() if callable(output) else output
@@ -178,7 +181,7 @@ def _execute_build(
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
-    build_image_with_progress(flake_refs, image_ref, verbose, dry_run)
+    build_image_with_progress(flake_refs, image_ref, verbose, dry_run, mount_points)
 
 
 @cli.command()
@@ -285,11 +288,28 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
         if config.devbox_config and config.devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
+    # Collect mount points from devbox config (volumes and tmpfs)
+    mount_points: list[str] = []
+    if config.devbox_config:
+        # Extract container paths from volumes
+        for vol in config.devbox_config.run.volumes:
+            # Volume format: host:container[:options]
+            parts = vol.split(":")
+            if len(parts) >= 2:
+                mount_points.append(parts[1])
+        # Extract paths from tmpfs
+        for tmpfs in config.devbox_config.run.tmpfs:
+            # Tmpfs format: /path[:options]
+            parts = tmpfs.split(":")
+            if parts:
+                mount_points.append(parts[0])
+
     _ensure_image_exists(
         flake_refs=config.flake_refs,
         image_ref=config.image_ref,
         force_rebuild=config.rebuild,
         verbose=config.verbose,
+        mount_points=mount_points if mount_points else None,
     )
     _run_container_with_config(config)
 
@@ -388,18 +408,21 @@ def _ensure_image_exists(
     image_ref: ImageRef,
     force_rebuild: bool,
     verbose: bool,
+    mount_points: list[str] | None = None,
 ) -> None:
     """Build image if needed."""
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
-        build_image_with_progress(flake_refs, image_ref, verbose)
+        build_image_with_progress(
+            flake_refs, image_ref, verbose, mount_points=mount_points
+        )
         return
 
     if image_exists(image_ref):
         return
 
     click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose)
+    build_image_with_progress(flake_refs, image_ref, verbose, mount_points=mount_points)
 
 
 def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]:

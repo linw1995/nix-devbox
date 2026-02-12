@@ -1,6 +1,6 @@
 """Core functionality for generating flake.nix content."""
 
-from .models import FlakeRef, ImageRef
+from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef
 
 # flake.nix template constants
 _FLAKE_HEADER = "{"
@@ -58,10 +58,15 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
       tag = "<<TAG>>";
       fromImage = baseImage;
       contents = [ entrypoint pkgs.gosu ];
+      # Create mount point directories with correct ownership
+      # This ensures volumes can be mounted properly at runtime
+      extraCommands = ''
+        <<EXTRA_COMMANDS>>
+      '';
       config = {
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
-        WorkingDir = "/workspace";
+        WorkingDir = "<<WORKDIR>>";
       };
     };
   in {
@@ -95,9 +100,40 @@ def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
     return ", ".join(base_args + proj_args)
 
 
+def _generate_extra_commands(mount_points: list[str], uid: int, gid: int) -> str:
+    """Generate extraCommands script to create mount point directories.
+
+    These commands run at image build time to create directories
+    that will be used as volume mount points.
+
+    Args:
+        mount_points: List of directory paths to create
+        uid: User ID for directory ownership
+        gid: Group ID for directory ownership
+
+    Returns:
+        Shell script content for extraCommands
+    """
+    if not mount_points:
+        return ""
+
+    lines = ["# Create mount point directories with correct ownership"]
+    for path in mount_points:
+        # Normalize path and ensure it starts with /
+        normalized = path.strip()
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        # Use mkdir -p to create parent directories if needed
+        lines.append(f"mkdir -p '.{normalized}'")
+        lines.append(f"chown {uid}:{gid} '.{normalized}'")
+
+    return "\n        ".join(lines)
+
+
 def generate_flake(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
+    mount_points: list[str] | None = None,
 ) -> str:
     """Generate flake.nix content from flake references."""
     if not flake_refs:
@@ -117,8 +153,18 @@ def generate_flake(
     # Get UID/GID from current runtime environment
     import os as _os
 
-    uid = str(_os.getuid())
-    gid = str(_os.getgid())
+    uid = _os.getuid()
+    gid = _os.getgid()
+    uid_str = str(uid)
+    gid_str = str(gid)
+
+    # Collect mount points: user-specified + default workdir
+    all_mount_points = list(mount_points) if mount_points else []
+    if DEFAULT_WORKDIR not in all_mount_points:
+        all_mount_points.append(DEFAULT_WORKDIR)
+
+    # Generate extraCommands script for creating mount points
+    extra_commands = _generate_extra_commands(all_mount_points, uid, gid)
 
     # Use string replace instead of format to avoid escaping issues
     image_package = _FLAKE_IMAGE_PACKAGE_TEMPLATE
@@ -127,8 +173,10 @@ def generate_flake(
     )
     image_package = image_package.replace("<<NAME>>", image_ref.name)
     image_package = image_package.replace("<<TAG>>", image_ref.tag)
-    image_package = image_package.replace("<<UID>>", uid)
-    image_package = image_package.replace("<<GID>>", gid)
+    image_package = image_package.replace("<<UID>>", uid_str)
+    image_package = image_package.replace("<<GID>>", gid_str)
+    image_package = image_package.replace("<<WORKDIR>>", DEFAULT_WORKDIR)
+    image_package = image_package.replace("<<EXTRA_COMMANDS>>", extra_commands)
 
     lines.append(image_package)
 

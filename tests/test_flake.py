@@ -60,6 +60,37 @@ class TestFlakeGeneration:
         assert "outputs = {" in flake_content
         assert "buildNixShellImage" in flake_content
 
+    def test_flake_generation_with_mount_points(self):
+        """Test flake generation with mount points."""
+        flake_refs = [FlakeRef.parse("/path/to/project")]
+        image_ref = ImageRef.parse("test:latest")
+        mount_points = ["/data", "/cache", "/home/user/.config"]
+
+        flake_content = generate_flake(flake_refs, image_ref, mount_points)
+
+        # Verify mount point directories are created via extraCommands
+        assert "extraCommands" in flake_content
+        # extraCommands uses relative paths (./path instead of /path)
+        assert "mkdir -p './data'" in flake_content
+        assert "mkdir -p './cache'" in flake_content
+        assert "mkdir -p './home/user/.config'" in flake_content
+        assert "chown 1000:100 './data'" in flake_content
+        assert "chown 1000:100 './cache'" in flake_content
+        assert "chown 1000:100 './home/user/.config'" in flake_content
+
+    def test_flake_generation_default_mount_point(self):
+        """Test that default /workspace is always included."""
+        flake_refs = [FlakeRef.parse("/path/to/project")]
+        image_ref = ImageRef.parse("test:latest")
+
+        # Without explicit mount_points, /workspace should still be created
+        flake_content = generate_flake(flake_refs, image_ref)
+
+        assert "extraCommands" in flake_content
+        # extraCommands uses relative paths
+        assert "mkdir -p './workspace'" in flake_content
+        assert "chown 1000:100 './workspace'" in flake_content
+
 
 @pytest.mark.skipif(
     subprocess.run(["which", "nix"], capture_output=True).returncode != 0,
