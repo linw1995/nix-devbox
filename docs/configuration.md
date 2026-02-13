@@ -52,11 +52,32 @@ run:
     - "--hostname=$HOSTNAME-devbox"
 ```
 
-## Environment Variables
+## Shell Variable Expansion
 
-- `$VAR` or `${VAR}` syntax for expansion
-- `$$VAR` for literal `$VAR` (no expansion)
-- Supported in: `volumes`, `tmpfs`, `extra_args`
+All configuration values support shell variable expansion (`$VAR`, `${VAR}`, `$(command)`) and are expanded by your shell when executing `docker run`:
+
+```yaml
+run:
+  volumes:
+    - "$HOME/.config:/root/.config"
+    - "$(pwd):/workspace"
+  env:
+    - "BUILD_TIME=$(date -Iseconds)"
+    - "USER=$USER"
+```
+
+**How it works**: nix-devbox builds a shell command and executes it via `$SHELL -c`, allowing your shell to perform variable expansion and command substitution.
+
+### Escaping Literals
+
+To use a literal `$` character without expansion, escape it with `\$`:
+
+```yaml
+run:
+  tmpfs:
+    # The path will be /$bunfs (literal $), not expanded
+    - "/\\$bunfs:exec,mode=1777"
+```
 
 ## Multi-Config Merge
 

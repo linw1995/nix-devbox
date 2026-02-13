@@ -1,6 +1,6 @@
 run:
   tmpfs:
-    - "/$$bunfs:exec,mode=1777"
+    - "/\\$bunfs:exec,mode=1777"
     - "/tmp:exec,mode=1777"
 
   volumes:

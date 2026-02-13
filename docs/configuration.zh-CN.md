@@ -52,11 +52,32 @@ run:
     - "--hostname=$HOSTNAME-devbox"
 ```
 
-## 环境变量
+## Shell 变量展开
 
-- `$VAR` 或 `${VAR}` 语法
-- `$$VAR` 表示字面量 `$VAR`（不展开）
-- 支持字段：`volumes`, `tmpfs`, `extra_args`
+所有配置值都支持 shell 变量展开（`$VAR`、`${VAR}`、`$(command)`），由你的 shell 在执行 `docker run` 时展开：
+
+```yaml
+run:
+  volumes:
+    - "$HOME/.config:/root/.config"
+    - "$(pwd):/workspace"
+  env:
+    - "BUILD_TIME=$(date -Iseconds)"
+    - "USER=$USER"
+```
+
+**工作原理**：nix-devbox 构建 shell 命令并通过 `$SHELL -c` 执行，让你的 shell 执行变量展开和命令替换。
+
+### 转义字面量
+
+如需使用字面量 `$` 而不展开，请使用 `\$` 转义：
+
+```yaml
+run:
+  tmpfs:
+    # 路径将是 /$bunfs（字面量 $），不会被展开
+    - "/\\$bunfs:exec,mode=1777"
+```
 
 ## 多配置合并
 
