@@ -28,6 +28,12 @@ nix-devbox run /path/to/project
 
 # Merge multiple devShells
 nix-devbox build /path/to/proj1 /path/to/proj2#nodejs
+
+# Build from remote GitHub repository
+nix-devbox build github:owner/repo
+
+# Build from remote with subdirectory
+nix-devbox build "github:owner/repo?dir=dev"
 ```
 
 See [docs/configuration.md](docs/configuration.md) for configuration options.

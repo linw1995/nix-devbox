@@ -28,6 +28,12 @@ nix-devbox run /path/to/project
 
 # 合并多个 devShell
 nix-devbox build /path/to/proj1 /path/to/proj2#nodejs
+
+# 从远程 GitHub 仓库构建
+nix-devbox build github:owner/repo
+
+# 从远程子目录构建
+nix-devbox build "github:owner/repo?dir=dev"
 ```
 
 查看 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) 了解配置选项。

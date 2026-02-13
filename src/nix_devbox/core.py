@@ -103,14 +103,16 @@ def _generate_shell_refs(flake_refs: list[FlakeRef]) -> str:
 def _generate_inputs_section(flake_refs: list[FlakeRef]) -> list[str]:
     """Generate the inputs section of flake.nix."""
     proj_inputs = [
-        f'    proj{i}.url = "path:{ref.path}";' for i, ref in enumerate(flake_refs)
+        f'    proj{i}.url = "{ref.url}";' for i, ref in enumerate(flake_refs)
     ]
     return [_FLAKE_INPUTS_START, *proj_inputs, _FLAKE_INPUTS_END]
 
 
 def _generate_shell_definitions(flake_refs: list[FlakeRef]) -> list[str]:
     """Generate shell variable definitions."""
-    return [f"    shell{i} = proj{i}.{ref.shell};" for i, ref in enumerate(flake_refs)]
+    return [
+        f"    shell{i} = proj{i}.{ref.shell_attr};" for i, ref in enumerate(flake_refs)
+    ]
 
 
 def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:

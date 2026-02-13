@@ -21,7 +21,7 @@ from .config import (
 )
 from .core import _validate_mount_point, generate_flake
 from .exceptions import DevboxError
-from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef
+from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef, get_flake_fetcher
 from .utils import extract_part_by_separator
 
 if TYPE_CHECKING:
@@ -89,7 +89,7 @@ def format_flake_refs(refs: list[FlakeRef]) -> str:
     """Format flake references for display."""
     lines = ["DevShells to be merged:"]
     for i, ref in enumerate(refs, 1):
-        lines.append(f"  {i}. {ref.path} -> {ref.shell}")
+        lines.append(f"  {i}. {ref.uri.raw} -> {ref.shell}")
     lines.append("")
     return "\n".join(lines)
 
@@ -236,10 +236,26 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
     if not flake_refs:
         return DevboxConfig()
 
+    fetcher = get_flake_fetcher()
+
     # Load config from each flake directory
-    configs = [
-        find_config(Path(flake_ref.path) / "flake.nix") for flake_ref in flake_refs
-    ]
+    configs = []
+    for flake_ref in flake_refs:
+        if flake_ref.uri.is_local:
+            # Extract the actual path from path:/absolute/path format
+            path_str = flake_ref.uri.url
+            if path_str.startswith("path:"):
+                path_str = path_str[5:]
+            configs.append(find_config(Path(path_str) / "flake.nix"))
+        else:
+            # For remote URLs, fetch the flake and look for devbox.yaml
+            try:
+                flake_path = fetcher.fetch(flake_ref.uri.url)
+                configs.append(find_config(flake_path / "flake.nix"))
+            except RuntimeError as e:
+                # Log warning but don't fail - remote flake may not have devbox.yaml
+                logger.warning(f"Could not fetch remote flake {flake_ref.uri.url}: {e}")
+                configs.append(DevboxConfig())
     # Filter out default (empty) configs
     non_default_configs = [cfg for cfg in configs if cfg != DevboxConfig()]
 
