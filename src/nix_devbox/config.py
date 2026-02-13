@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -11,104 +9,7 @@ from typing import Any, Callable, TypeVar
 import yaml
 
 from .exceptions import ConfigError
-from .utils import expand_flagged_options, extract_part_by_separator
-
-# Environment variable pattern: $VAR or ${VAR}
-# Does not match $$ (double dollar, which represents literal $)
-_ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}|\$(\w+)")
-
-
-# Unique placeholder using Unicode private use area characters
-# These characters (U+E000-U+F8FF) are reserved for private use and won't
-# appear in normal text input, making collisions virtually impossible.
-_LITERAL_DOLLAR_PREFIX = "\ue000LITDS\ue001"
-_LITERAL_DOLLAR_SUFFIX = "\ue002"
-
-
-def _encode_literal_dollar(index: int) -> str:
-    """Encode a literal dollar position as a unique placeholder."""
-    return f"{_LITERAL_DOLLAR_PREFIX}{index}{_LITERAL_DOLLAR_SUFFIX}"
-
-
-# Pattern to match literal $$ (double dollar)
-_LITERAL_DOLLAR_PATTERN = re.compile(r"\$\$")
-
-
-def _extract_literal_dollars(value: str) -> tuple[str, list[str]]:
-    """Extract literal $$ sequences and return template with placeholders.
-
-    Returns:
-        Tuple of (template with placeholders, list of literal dollar markers)
-    """
-    literal_dollars: list[str] = []
-
-    def replace_with_placeholder(match: re.Match) -> str:
-        placeholder = _encode_literal_dollar(len(literal_dollars))
-        literal_dollars.append(placeholder)
-        return placeholder
-
-    template = _LITERAL_DOLLAR_PATTERN.sub(replace_with_placeholder, value)
-    return template, literal_dollars
-
-
-def _restore_literal_dollars(value: str, placeholders: list[str]) -> str:
-    """Restore literal $ characters from placeholders."""
-    for placeholder in placeholders:
-        value = value.replace(placeholder, "$")
-    return value
-
-
-def _replace_env_var(match: re.Match) -> str:
-    """Replace an environment variable reference with its value."""
-    # match.group(1) is ${VAR}, match.group(2) is $VAR
-    var_name = match.group(1) or match.group(2)
-    return os.environ.get(var_name, match.group(0))
-
-
-def expand_env_vars(value: str) -> str:
-    """Expand environment variables in a string.
-
-    Supports both $VAR and ${VAR} syntax.
-    Unknown variables are left unchanged.
-    Use $$ to represent a literal $ character.
-
-    Args:
-        value: String potentially containing env var references
-
-    Returns:
-        String with env vars expanded and $$ converted to $
-
-    Examples:
-        >>> import os
-        >>> os.environ['TEST_VAR'] = 'test_value'
-        >>> expand_env_vars('/home/$TEST_VAR/file')
-        '/home/test_value/file'
-        >>> expand_env_vars('/home/${TEST_VAR}/file')
-        '/home/test_value/file'
-        >>> expand_env_vars('/home/$UNKNOWN/file')
-        '/home/$UNKNOWN/file'
-        >>> expand_env_vars('/home/$$TEST_VAR/file')  # Literal $
-        '/home/$TEST_VAR/file'
-    """
-    # Protect literal $$ from expansion by replacing with placeholders
-    template, literal_dollar_placeholders = _extract_literal_dollars(value)
-
-    # Expand environment variables
-    expanded = _ENV_VAR_PATTERN.sub(_replace_env_var, template)
-
-    # Restore literal $ from placeholders
-    return _restore_literal_dollars(expanded, literal_dollar_placeholders)
-
-
-def expand_env_vars_in_list(items: list[str] | None) -> list[str]:
-    """Expand environment variables in all strings in a list.
-
-    Returns empty list if items is None.
-    """
-    if items is None:
-        return []
-    return [expand_env_vars(item) for item in items]
-
+from .utils import extract_part_by_separator
 
 # Configuration file names to look for, in order of preference
 CONFIG_FILE_NAMES = ("devbox.yaml", ".devbox.yaml", "devbox.yml", ".devbox.yml")
@@ -142,7 +43,7 @@ class SecurityConfig:
 
 @dataclass(frozen=True)
 class ResourcesConfig:
-    """Resource limit configuration."""
+    """Resource limits for docker run."""
 
     memory: str | None = None
     cpus: str | None = None
@@ -155,14 +56,14 @@ class ResourcesConfig:
             args.extend(["-m", self.memory])
         if self.cpus:
             args.extend(["--cpus", self.cpus])
-        if self.pids_limit is not None:
+        if self.pids_limit:
             args.extend(["--pids-limit", str(self.pids_limit)])
         return args
 
 
 @dataclass(frozen=True)
 class LoggingConfig:
-    """Docker logging configuration."""
+    """Logging configuration for docker run."""
 
     # Use None to indicate "not explicitly set" (will use Docker default)
     # This allows distinguishing between "not set" and "explicitly set to json-file"
@@ -188,8 +89,6 @@ class LoggingConfig:
 class RunConfig:
     """Docker run configuration for devshell environments."""
 
-    # Note: restart policy is not useful for interactive devshell containers
-    # as they typically use --rm and run in interactive mode (-it)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     resources: ResourcesConfig = field(default_factory=ResourcesConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -198,41 +97,44 @@ class RunConfig:
     env: list[str] = field(default_factory=list)
     tmpfs: list[str] = field(default_factory=list)
     extra_args: list[str] = field(default_factory=list)
-    # User to run container as (uid:gid format, e.g., "1000:1000")
     user: str | None = None
 
-    def to_docker_args(self) -> list[str]:
-        """Convert run config to docker run arguments (including all options)."""
-        args: list[str] = []
-
-        # Add all configuration sections (non-list args)
-        args.extend(self._to_non_list_docker_args())
-
-        # Add list-based options with their flags
-        args.extend(expand_flagged_options("-p", self.ports))
-        args.extend(expand_flagged_options("-v", self.volumes))
-        args.extend(expand_flagged_options("-e", self.env))
-        args.extend(expand_flagged_options("--tmpfs", self.tmpfs))
-
-        # Add extra args as-is
-        if self.extra_args:
-            args.extend(self.extra_args)
-
-        return args
-
     def _to_non_list_docker_args(self) -> list[str]:
-        """Convert non-list configuration to docker run arguments.
+        """Convert non-list config options to docker arguments.
 
-        Returns args for security, resources, and logging configs only.
         List configs (ports, volumes, env, tmpfs) are handled separately.
         """
-        args: list[str] = []
+        args = []
         args.extend(self.security.to_docker_args())
         args.extend(self.resources.to_docker_args())
         args.extend(self.logging.to_docker_args())
         if self.user:
-            args.extend(["-u", self.user])
+            args.append(f"--user={self.user}")
         return args
+
+    def to_docker_args(self) -> list[str]:
+        """Convert all config options to docker run arguments.
+
+        Note: Values are returned as-is for shell variable expansion.
+        """
+        args = self._to_non_list_docker_args()
+
+        # Add list options
+        for port in self.ports:
+            args.extend(["-p", port])
+        for volume in self.volumes:
+            args.extend(["-v", volume])
+        for e in self.env:
+            args.extend(["-e", e])
+        for tmp in self.tmpfs:
+            args.extend(["--tmpfs", tmp])
+        for arg in self.extra_args:
+            args.append(arg)
+
+        return args
+
+
+T = TypeVar("T")
 
 
 def _parse_security_config(data: dict[str, Any] | None) -> SecurityConfig:
@@ -271,27 +173,24 @@ def _parse_logging_config(data: dict[str, Any] | None) -> LoggingConfig:
 
 
 def _parse_run_config(data: dict[str, Any]) -> RunConfig:
-    """Parse run configuration from dict."""
-    # Expand env vars in list fields
-    volumes = expand_env_vars_in_list(data.get("volumes", []))
-    tmpfs = expand_env_vars_in_list(data.get("tmpfs", []))
-    extra_args = expand_env_vars_in_list(data.get("extra_args", []))
+    """Parse run configuration from dict.
 
+    Note: Values are passed through as-is. Shell variable expansion
+    ($VAR, $(cmd)) is handled by the shell when executing docker run.
+    """
     # Get user config: if not specified, leave as None
     # The entrypoint will handle user switching automatically
     user = data.get("user")
 
-    # Note: ports and env typically don't need env var expansion
-    # as they are usually fixed values or container-side configs
     return RunConfig(
         security=_parse_security_config(data.get("security")),
         resources=_parse_resources_config(data.get("resources")),
         logging=_parse_logging_config(data.get("logging")),
         ports=data.get("ports", []),
-        volumes=volumes,
+        volumes=data.get("volumes", []),
         env=data.get("env", []),
-        tmpfs=tmpfs,
-        extra_args=extra_args,
+        tmpfs=data.get("tmpfs", []),
+        extra_args=data.get("extra_args", []),
         user=user,
     )
 
@@ -321,14 +220,14 @@ def _parse_init_config(data: dict[str, Any] | None) -> InitConfig:
 
 @dataclass(frozen=True)
 class DevboxConfig:
-    """Full nix-devbox configuration."""
+    """Complete devbox configuration."""
 
     run: RunConfig = field(default_factory=RunConfig)
     init: InitConfig = field(default_factory=InitConfig)
 
     @classmethod
-    def from_file(cls, path: Path | str) -> DevboxConfig:
-        """Load configuration from YAML file.
+    def from_file(cls, path: Path) -> "DevboxConfig":
+        """Load configuration from a YAML file.
 
         Args:
             path: Path to the YAML configuration file
@@ -337,47 +236,50 @@ class DevboxConfig:
             DevboxConfig instance
 
         Raises:
-            ConfigError: If the YAML file is malformed
+            ConfigError: If file cannot be read or parsed
         """
-        path = Path(path)
-        if not path.exists():
-            return cls()
-
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            return cls()
         except yaml.YAMLError as exc:
-            raise ConfigError(f"Failed to parse config file {path}: {exc}") from exc
+            raise ConfigError(f"Invalid YAML in {path}: {exc}") from exc
 
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> DevboxConfig:
-        """Create config from dictionary."""
+    def from_dict(cls, data: dict[str, Any]) -> "DevboxConfig":
+        """Create DevboxConfig from a dictionary."""
         run_data = data.get("run", {})
         init_data = data.get("init", {})
+
         return cls(
             run=_parse_run_config(run_data),
             init=_parse_init_config(init_data),
         )
 
 
-def find_config(flake_nix_path: Path | str) -> DevboxConfig:
-    """Find and load devbox config from the directory containing flake.nix.
+def find_config(start_path: Path) -> DevboxConfig:
+    """Find and load devbox configuration.
+
+    Searches for configuration files in order of preference:
+    1. devbox.yaml
+    2. .devbox.yaml
+    3. devbox.yml
+    4. .devbox.yml
 
     Args:
-        flake_nix_path: Path to flake.nix file (config is searched in its parent dir)
+        start_path: Path to start searching from (should be flake.nix directory)
 
     Returns:
-        DevboxConfig from the first found config file, or default if none found
+        DevboxConfig instance (empty config if no file found)
     """
-    flake_dir = Path(flake_nix_path).parent
-
-    for name in CONFIG_FILE_NAMES:
-        config_path = flake_dir / name
+    for filename in CONFIG_FILE_NAMES:
+        config_path = start_path.parent / filename
         if config_path.exists():
             return DevboxConfig.from_file(config_path)
 
-    # Return default config if not found
     return DevboxConfig()
 
 

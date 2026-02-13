@@ -196,7 +196,9 @@ class TestDevboxConfig:
         assert cfg.run.resources.memory == "512m"
 
     def test_from_file_not_exists(self):
-        cfg = DevboxConfig.from_file("/nonexistent/config.yaml")
+        from pathlib import Path
+
+        cfg = DevboxConfig.from_file(Path("/nonexistent/config.yaml"))
         assert isinstance(cfg.run, RunConfig)
 
     def test_from_file_valid(self, tmp_path: Path):

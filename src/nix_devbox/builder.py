@@ -1,15 +1,15 @@
 """Docker image building and container running functionality."""
 
 import logging
+import os
+import shlex
 import subprocess
-from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
 from .exceptions import BuildError, DockerError
-from .utils import expand_flagged_options
 
 if TYPE_CHECKING:
     from .models import ImageRef
@@ -147,7 +147,7 @@ def run_container(
     Raises:
         DockerError: If the container fails to start
     """
-    docker_cmd = _build_docker_command(
+    cmd_str = _build_docker_command_string(
         image_ref=image_ref,
         command=command,
         ports=ports,
@@ -165,14 +165,16 @@ def run_container(
     )
 
     if dry_run:
-        click.echo(" ".join(docker_cmd))
+        click.echo(cmd_str)
         return
 
     if verbose:
-        logger.info("Executing command: %s", " ".join(docker_cmd))
+        logger.info("Executing command: %s", cmd_str)
 
+    # Execute via $SHELL -c to allow shell variable expansion
+    shell = os.environ.get("SHELL", "/bin/sh")
     try:
-        subprocess.run(docker_cmd, check=True)
+        subprocess.run([shell, "-c", cmd_str], check=True)
     except subprocess.CalledProcessError as exc:
         # For interactive TTY mode, user exiting the shell is normal behavior
         if interactive and tty and exc.returncode in _NORMAL_EXIT_CODES:
@@ -181,7 +183,7 @@ def run_container(
             raise DockerError(f"Failed to run container: {exc}") from exc
 
 
-def _build_docker_command(
+def _build_docker_command_string(
     image_ref: "ImageRef",
     *,
     command: list[str] | None,
@@ -197,63 +199,55 @@ def _build_docker_command(
     user: str | None,
     detach: bool,
     extra_args: list[str] | None,
-) -> list[str]:
-    """Build the docker run command with all options."""
-    cmd_parts: list[list[str]] = []
+) -> str:
+    """Build the docker run command as a shell command string.
+
+    Values are not quoted to allow shell variable expansion ($VAR, $(cmd)).
+    """
+    parts: list[str] = []
 
     # Base command
-    cmd_parts.append(["docker", "run"])
+    parts.append("docker run")
 
     # Boolean flags
-    cmd_parts.append(_build_boolean_flags(rm, interactive, tty, detach))
+    if rm:
+        parts.append("--rm")
+    if interactive:
+        parts.append("-i")
+    if tty:
+        parts.append("-t")
+    if detach:
+        parts.append("-d")
 
     # Named options
-    cmd_parts.append(_build_named_options(container_name, workdir, user))
+    if container_name:
+        parts.append(f"--name={container_name}")
+    if workdir:
+        parts.append(f"-w={workdir}")
+    if user:
+        parts.append(f"-u={user}")
 
-    # List options with flags
-    cmd_parts.append(expand_flagged_options("-p", ports))
-    cmd_parts.append(expand_flagged_options("-v", volumes))
-    cmd_parts.append(expand_flagged_options("-e", env))
-    cmd_parts.append(expand_flagged_options("--tmpfs", tmpfs))
+    # List options - values are passed as-is for shell expansion
+    for port in ports or []:
+        parts.append(f"-p={port}")
+    for volume in volumes or []:
+        parts.append(f"-v={volume}")
+    for e in env or []:
+        parts.append(f"-e={e}")
+    for tmp in tmpfs or []:
+        parts.append(f"--tmpfs={tmp}")
 
     # Extra args from config
-    if extra_args:
-        cmd_parts.append(extra_args)
+    for arg in extra_args or []:
+        parts.append(arg)
 
     # Image reference
-    cmd_parts.append([str(image_ref)])
+    parts.append(shlex.quote(str(image_ref)))
 
     # Command to execute
     if command:
-        cmd_parts.append(command)
+        # Quote each command part to handle spaces, but preserve $ for expansion
+        cmd_str = " ".join(shlex.quote(arg) for arg in command)
+        parts.append(cmd_str)
 
-    # Flatten all parts
-    return [arg for part in cmd_parts for arg in part]
-
-
-def _build_boolean_flags(
-    rm: bool, interactive: bool, tty: bool, detach: bool
-) -> list[str]:
-    """Build list of boolean flags for docker run."""
-    # Use list comprehension with conditional expressions for clarity
-    flags = [
-        ("--rm" if rm else None),
-        ("-i" if interactive else None),
-        ("-t" if tty else None),
-        ("-d" if detach else None),
-    ]
-    return [f for f in flags if f is not None]
-
-
-def _build_named_options(
-    container_name: str | None, workdir: str | None, user: str | None
-) -> list[str]:
-    """Build list of named options (key-value pairs) for docker run."""
-    # Use itertools.chain to flatten conditional option pairs
-    return list(
-        chain(
-            ("--name", container_name) if container_name else (),
-            ("-w", workdir) if workdir else (),
-            ("-u", user) if user else (),
-        )
-    )
+    return " ".join(parts)
