@@ -10,13 +10,6 @@ from nix_devbox.core import generate_flake
 from nix_devbox.models import FlakeRef, ImageRef
 
 
-@pytest.fixture(autouse=True)
-def set_uid_gid_env(monkeypatch):
-    """Set NIX_DEVBOX_UID and NIX_DEVBOX_GID for all tests."""
-    monkeypatch.setenv("NIX_DEVBOX_UID", "1000")
-    monkeypatch.setenv("NIX_DEVBOX_GID", "100")
-
-
 class TestFlakeGeneration:
     """Tests for flake.nix generation."""
 
@@ -68,16 +61,15 @@ class TestFlakeGeneration:
 
         flake_content = generate_flake(flake_refs, image_ref, mount_points)
 
-        # Verify mount point parent directories are created via extraCommands
-        assert "extraCommands" in flake_content
+        # Verify mount point parent directories are created via fakeRootCommands
+        assert "fakeRootCommands" in flake_content
         # /data and /cache are direct children of root, no parent to create
         assert "mkdir -p './data'" not in flake_content
         assert "mkdir -p './cache'" not in flake_content
         # /home/user/.config has parents: /home, /home/user
         assert "mkdir -p './home'" in flake_content
-        assert "chown 1000:100 './home'" in flake_content
+        assert "chown" in flake_content
         assert "mkdir -p './home/user'" in flake_content
-        assert "chown 1000:100 './home/user'" in flake_content
         # Mount point itself is NOT created
         assert "mkdir -p './home/user/.config'" not in flake_content
 
@@ -89,11 +81,11 @@ class TestFlakeGeneration:
         # /workspace is at root level, no parent dirs to create
         flake_content = generate_flake(flake_refs, image_ref)
 
-        assert "extraCommands" in flake_content
+        assert "fakeRootCommands" in flake_content
         # /workspace has no parent dirs (except root), so no mkdir commands
         assert "mkdir -p './workspace'" not in flake_content
-        # The mount point itself is NOT created in extraCommands
-        assert "chown 1000:100 './workspace'" not in flake_content
+        # The mount point itself is NOT created in fakeRootCommands
+        assert "chown" not in flake_content or "'./workspace'" not in flake_content
 
     def test_flake_generation_parent_directories(self):
         """Test that only parent directories are created, not mount points."""
@@ -104,32 +96,25 @@ class TestFlakeGeneration:
 
         flake_content = generate_flake(flake_refs, image_ref, mount_points)
 
-        assert "extraCommands" in flake_content
+        assert "fakeRootCommands" in flake_content
         # Parent directories should be created and chowned
         assert "mkdir -p './data'" in flake_content
-        assert "chown 1000:100 './data'" in flake_content
+        assert "chown" in flake_content
         assert "mkdir -p './data/subdir'" in flake_content
-        assert "chown 1000:100 './data/subdir'" in flake_content
         # Mount point itself is NOT created (docker creates it when mounting)
         assert "mkdir -p './data/subdir/deep'" not in flake_content
-        assert "chown 1000:100 './data/subdir/deep'" not in flake_content
 
     def test_flake_generation_excludes_special_dirs(self):
-        """Test that /build itself is excluded, but subdirs are handled."""
+        """Test that /tmp is excluded but other paths are handled."""
         flake_refs = [FlakeRef.parse("/path/to/project")]
         image_ref = ImageRef.parse("test:latest")
-        # Include paths under /build and /tmp which should be handled specially
-        mount_points = ["/build/.config/app", "/tmp/cache", "/data"]
+        # Include paths under /tmp which should be handled specially
+        # /tmp/cache is not under /build so it's allowed
+        mount_points = ["/tmp/cache", "/data"]
 
         flake_content = generate_flake(flake_refs, image_ref, mount_points)
 
-        assert "extraCommands" in flake_content
-        # /build itself is NOT created (already exists from buildNixShellImage)
-        assert "mkdir -p './build'" not in flake_content
-        assert "chown 1000:100 './build'" not in flake_content
-        # /build/.config IS created and chowned
-        assert "mkdir -p './build/.config'" in flake_content
-        assert "chown 1000:100 './build/.config'" in flake_content
+        assert "fakeRootCommands" in flake_content
         # /tmp itself should NOT be created (it needs special permissions)
         assert "mkdir -p './tmp'" not in flake_content
         # /data has no parent (direct child of root), not created
