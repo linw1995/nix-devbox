@@ -8,7 +8,3 @@ run:
     - "$HOME/.config/opencode:/home/.config/opencode:rw"
     - "$HOME/.local/share/opencode:/home/.local/share/opencode:rw"
     - "$HOME/.local/state/opencode:/home/.local/state/opencode:rw"
-
-  env:
-    - XDG_DATA_HOME=/home/.local/share
-    - XDG_STATE_HOME=/home/.local/state

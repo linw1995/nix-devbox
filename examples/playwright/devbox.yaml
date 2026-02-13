@@ -1,9 +1,3 @@
 run:
   tmpfs:
     - "/tmp:exec,mode=1777"
-
-  env:
-    # Note: /build is reserved for Nix internal use and cannot be used.
-    - XDG_CACHE_HOME=/home/.cache
-    - XDG_DATA_HOME=/home/.local/share
-    - XDG_STATE_HOME=/home/.local/state

@@ -4,7 +4,3 @@ run:
   volumes:
     # Note: /build is reserved for Nix internal use and cannot be used.
     - "$HOME/.npm:/home/.npm:rw"
-  env:
-    - XDG_CACHE_HOME=/home/.cache
-    - XDG_DATA_HOME=/home/.local/share
-    - XDG_STATE_HOME=/home/.local/state

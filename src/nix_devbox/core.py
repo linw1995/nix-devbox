@@ -48,6 +48,9 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         exit 1
       fi
 
+      # Modify passwd to use /home instead of /build (runtime fix)
+      ${pkgs.gnused}/bin/sed -i 's|/build|/home|g' /etc/passwd 2>/dev/null || true
+
       # Run as the same uid/gid used during build
       if [ $# -eq 0 ]; then
         exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
