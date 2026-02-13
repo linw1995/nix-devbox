@@ -76,7 +76,7 @@ See [examples/](examples/) directory for example configurations.
 
 ## Dependencies
 
-- Python >= 3.9
+- Python >= 3.14
 - Nix (with flakes)
 - Docker
 

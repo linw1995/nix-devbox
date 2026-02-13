@@ -76,7 +76,7 @@ nix-devbox run @nix-devbox/base @nix-devbox/opencode
 
 ## 依赖
 
-- Python >= 3.9
+- Python >= 3.14
 - Nix (flakes)
 - Docker
 
