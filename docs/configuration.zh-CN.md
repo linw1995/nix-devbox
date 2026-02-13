@@ -34,8 +34,8 @@ run:
     - "8080:8080"
 
   # 卷挂载（支持环境变量）
+  # 注意：/build 及其子路径保留给 Nix 内部使用。
   volumes:
-    - ".:/workspace"
     - "$HOME/.config:/root/.config"
 
   # tmpfs 挂载

@@ -1,6 +1,13 @@
 """Core functionality for generating flake.nix content."""
 
-from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef
+from pathlib import Path
+
+from .models import (
+    DEFAULT_WORKDIR,
+    RESERVED_PATHS,
+    FlakeRef,
+    ImageRef,
+)
 
 # flake.nix template constants
 _FLAKE_HEADER = "{"
@@ -24,10 +31,20 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
     entrypoint = pkgs.writeShellScriptBin "entrypoint" ''
       set -e
 
+      # Enable debug output if NIX_DEVBOX_DEBUG is set
+      if [ -n "''${NIX_DEVBOX_DEBUG:-}" ]; then
+        ${pkgs.coreutils}/bin/echo "=== Nix Devbox Debug Mode ===" >&2
+        ${pkgs.coreutils}/bin/echo "Current user: $(${pkgs.coreutils}/bin/id)" >&2
+        ${pkgs.coreutils}/bin/echo "Arguments: $*" >&2
+        ${pkgs.coreutils}/bin/echo "HOME: ''${HOME:-}" >&2
+        ${pkgs.coreutils}/bin/ls -la / >&2
+        ${pkgs.coreutils}/bin/echo "============================" >&2
+      fi
+
       # Find buildNixShellImage's rcfile
       rcfile=$(${pkgs.coreutils}/bin/ls /nix/store/*-nix-shell-rc 2>/dev/null | ${pkgs.coreutils}/bin/head -1)
       if [ -z "$rcfile" ]; then
-        echo "Error: Could not find nix-shell-rc" >&2
+        ${pkgs.coreutils}/bin/echo "Error: Could not find nix-shell-rc" >&2
         exit 1
       fi
 
@@ -50,19 +67,19 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
     };
 
     # Create final image with entrypoint
-    # Use buildImage (non-layered) to avoid layer count issues with fromImage
-    # buildNixShellImage can use many layers, and adding more layers on top
-    # can exceed Docker's 127 layer limit. buildImage creates a single layer.
-    image = pkgs.dockerTools.buildImage {
+    # Use buildLayeredImage to properly support fromImage with fakeRootCommands
+    # fakeRootCommands runs in fakeroot environment, allowing chown without VM
+    image = pkgs.dockerTools.buildLayeredImage {
       name = "<<NAME>>";
       tag = "<<TAG>>";
       fromImage = baseImage;
-      contents = [ entrypoint pkgs.gosu ];
+      contents = [ entrypoint ];
       # Create mount point directories with correct ownership
-      # This ensures volumes can be mounted properly at runtime
-      extraCommands = ''
+      fakeRootCommands = ''
         <<EXTRA_COMMANDS>>
       '';
+      # Increase maxLayers to accommodate baseImage layers + new layer
+      maxLayers = 125;
       config = {
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
@@ -100,11 +117,69 @@ def _generate_inputs_args(flake_refs: list[FlakeRef]) -> str:
     return ", ".join(base_args + proj_args)
 
 
-def _generate_extra_commands(mount_points: list[str], uid: int, gid: int) -> str:
-    """Generate extraCommands script to create mount point directories.
+def _collect_parent_directories(paths: list[str]) -> list[str]:
+    """Collect parent directories of the given paths (excluding the paths themselves).
 
-    These commands run at image build time to create directories
-    that will be used as volume mount points.
+    Args:
+        paths: List of directory paths
+
+    Returns:
+        Sorted list of unique parent directories, sorted by depth
+    """
+    all_parents: set[str] = set()
+
+    for path in paths:
+        # Normalize path and ensure it starts with /
+        normalized = path.strip()
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+
+        # Get parent directories only (exclude the target directory itself)
+        parent = str(Path(normalized).parent)
+        while parent and parent != "/":
+            all_parents.add(parent)
+            parent = str(Path(parent).parent)
+
+    # Sort by depth (shorter paths first) to ensure parent dirs are created first
+    return sorted(all_parents, key=lambda x: (x.count("/"), x))
+
+
+def _validate_mount_point(path: str) -> str:
+    """Validate user mount point path.
+
+    Returns the path unchanged if valid, raises error if conflicts
+    with Nix reserved paths.
+
+    Args:
+        path: User-specified mount point path
+
+    Returns:
+        The original path (unchanged)
+
+    Raises:
+        ValueError: If path is under RESERVED_PATHS
+    """
+    normalized = path.strip()
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+
+    for reserved in RESERVED_PATHS:
+        if normalized == reserved or normalized.startswith(f"{reserved}/"):
+            raise ValueError(
+                f"Mount point '{path}' conflicts with reserved path '{reserved}'."
+            )
+
+    return path
+
+
+def _generate_extra_commands(mount_points: list[str], uid: int, gid: int) -> str:
+    """Generate fakeRootCommands script to create mount point directories.
+
+    These commands run at image build time in a fakeroot environment
+    to create directories that will be used as volume mount points.
+
+    Note: /build is reserved for Nix internal use (buildNixShellImage's
+    homeDirectory) and should not be created/modified here.
 
     Args:
         mount_points: List of directory paths to create
@@ -112,20 +187,31 @@ def _generate_extra_commands(mount_points: list[str], uid: int, gid: int) -> str
         gid: Group ID for directory ownership
 
     Returns:
-        Shell script content for extraCommands
+        Shell script content for fakeRootCommands
     """
     if not mount_points:
         return ""
 
-    lines = ["# Create mount point directories with correct ownership"]
-    for path in mount_points:
-        # Normalize path and ensure it starts with /
-        normalized = path.strip()
-        if not normalized.startswith("/"):
-            normalized = f"/{normalized}"
-        # Use mkdir -p to create parent directories if needed
-        lines.append(f"mkdir -p '.{normalized}'")
-        lines.append(f"chown {uid}:{gid} '.{normalized}'")
+    # Collect parent directories only (mount points themselves are created by docker)
+    all_dirs = _collect_parent_directories(mount_points)
+
+    lines = [
+        "# Create mount point directories with correct ownership",
+        "echo '=== fakeRootCommands START ===' >&2",
+    ]
+
+    for dir_path in all_dirs:
+        # Skip /tmp (needs special permissions 1777)
+        # Skip /build itself (already created by buildNixShellImage with special permissions)
+        if dir_path == "/tmp" or dir_path == "/build":
+            continue
+
+        # Create directory and set ownership (chown works in fakeroot)
+        lines.append(f"echo 'Create directory {dir_path}' >&2")
+        lines.append(f"mkdir -p '.{dir_path}' >&2")
+        lines.append(f"chown {uid}:{gid} '.{dir_path}' >&2")
+
+    lines.append("echo '=== fakeRootCommands END ===' >&2")
 
     return "\n        ".join(lines)
 
@@ -158,10 +244,14 @@ def generate_flake(
     uid_str = str(uid)
     gid_str = str(gid)
 
-    # Collect mount points: user-specified + default workdir
+    # Collect and validate mount points
     all_mount_points = list(mount_points) if mount_points else []
     if DEFAULT_WORKDIR not in all_mount_points:
         all_mount_points.append(DEFAULT_WORKDIR)
+
+    # Validate mount points (raises error if conflicts with RESERVED_PATHS)
+    for p in all_mount_points:
+        _validate_mount_point(p)
 
     # Generate extraCommands script for creating mount points
     extra_commands = _generate_extra_commands(all_mount_points, uid, gid)

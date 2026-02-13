@@ -12,6 +12,16 @@ DEVSHELLS_PREFIX = "devShells."
 # Default container paths
 DEFAULT_WORKDIR = "/workspace"
 
+# Reserved paths for Nix internal use (buildNixShellImage uses /build)
+RESERVED_PATHS = frozenset({"/build"})
+
+# Base directory for user mount points (avoid conflicts with RESERVED_PATHS)
+USER_MOUNT_BASE = "/home"
+
+# Mapping for reserved paths: reserved_path -> alternative_path
+# e.g., /build/.config -> /home/.config
+RESERVED_PATH_MAPPING = "/home"
+
 
 @dataclass(frozen=True)
 class ImageRef:

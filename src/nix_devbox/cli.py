@@ -19,7 +19,7 @@ from .config import (
     find_config,
     merge_devbox_configs,
 )
-from .core import generate_flake
+from .core import _validate_mount_point, generate_flake
 from .exceptions import DevboxError
 from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef
 from .utils import extract_part_by_separator
@@ -171,7 +171,6 @@ def _execute_build(
     tag: str | None,
     verbose: bool,
     dry_run: bool = False,
-    mount_points: list[str] | None = None,
 ) -> None:
     """Execute Docker image build with parsed arguments."""
     actual_output = output() if callable(output) else output
@@ -181,7 +180,22 @@ def _execute_build(
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
-    build_image_with_progress(flake_refs, image_ref, verbose, dry_run, mount_points)
+    # Load devbox config and collect mount points
+    devbox_config = _load_devbox_config(flake_refs)
+    mount_points: list[str] = []
+    if devbox_config:
+        # Extract container paths from volumes
+        for vol in devbox_config.run.volumes:
+            parts = vol.split(":")
+            if len(parts) >= 2:
+                mount_points.append(parts[1])
+        # Note: tmpfs paths are not included here as they are mounted at runtime
+        # Add ensure_dirs from init config
+        mount_points.extend(devbox_config.init.ensure_dirs)
+
+    build_image_with_progress(
+        flake_refs, image_ref, verbose, dry_run, mount_points if mount_points else None
+    )
 
 
 @cli.command()
@@ -288,7 +302,8 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
         if config.devbox_config and config.devbox_config.run.resources.memory:
             click.echo("Using devbox config from flake directory")
 
-    # Collect mount points from devbox config (volumes and tmpfs)
+    # Collect all directories that need to be created in the image
+    # Includes: volume mount points and ensure_dirs (but not tmpfs - mounted at runtime)
     mount_points: list[str] = []
     if config.devbox_config:
         # Extract container paths from volumes
@@ -297,12 +312,9 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
             parts = vol.split(":")
             if len(parts) >= 2:
                 mount_points.append(parts[1])
-        # Extract paths from tmpfs
-        for tmpfs in config.devbox_config.run.tmpfs:
-            # Tmpfs format: /path[:options]
-            parts = tmpfs.split(":")
-            if parts:
-                mount_points.append(parts[0])
+        # Note: tmpfs paths are excluded as they are mounted at runtime
+        # Add ensure_dirs from init config
+        mount_points.extend(config.devbox_config.init.ensure_dirs)
 
     _ensure_image_exists(
         flake_refs=config.flake_refs,
@@ -479,6 +491,33 @@ def _merge_mappings(
     return result
 
 
+def _validate_volume_path(volume_spec: str) -> str:
+    """Validate volume mount path.
+
+    Volume format: host:container[:options]
+    Raises error if container path conflicts with RESERVED_PATHS.
+
+    Args:
+        volume_spec: Volume specification string
+
+    Returns:
+        Original volume specification (unchanged)
+
+    Raises:
+        ValueError: If container path conflicts with RESERVED_PATHS
+    """
+    parts = volume_spec.split(":")
+    if len(parts) < 2:
+        return volume_spec
+
+    container_path = parts[1]
+
+    # Validate container path (raises error if reserved)
+    _validate_mount_point(container_path)
+
+    return volume_spec
+
+
 def _prepare_container_config(
     config: ContainerLaunchConfig,
 ) -> dict[str, Any]:
@@ -523,6 +562,14 @@ def _prepare_container_config(
 
     parsed_cmd = shlex.split(config.command) if config.command else None
     merged_user = config.user if config.user is not None else file_config.user
+
+    # Validate volume paths (raises error if conflicts with RESERVED_PATHS)
+    for v in merged_volumes:
+        _validate_volume_path(v)
+
+    # Validate working directory if specified
+    if config.workdir:
+        _validate_mount_point(config.workdir)
 
     return {
         "command": parsed_cmd,

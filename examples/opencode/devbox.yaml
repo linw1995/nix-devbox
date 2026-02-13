@@ -4,10 +4,11 @@ run:
     - "/tmp:exec,mode=1777"
 
   volumes:
-    - "$HOME/.config/opencode:/build/.config/opencode:rw"
-    - "$HOME/.local/share/opencode:/build/.local/share/opencode:rw"
-    - "$HOME/.local/state/opencode:/build/.local/state/opencode:rw"
+    # Note: /build is reserved for Nix internal use and cannot be used.
+    - "$HOME/.config/opencode:/home/.config/opencode:rw"
+    - "$HOME/.local/share/opencode:/home/.local/share/opencode:rw"
+    - "$HOME/.local/state/opencode:/home/.local/state/opencode:rw"
 
   env:
-    - XDG_DATA_HOME=/build/.local/share
-    - XDG_STATE_HOME=/build/.local/state
+    - XDG_DATA_HOME=/home/.local/share
+    - XDG_STATE_HOME=/home/.local/state

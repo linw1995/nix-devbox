@@ -2,8 +2,9 @@ run:
   tmpfs:
     - "/tmp:exec,mode=1777"
   volumes:
-    - "$HOME/.npm:/build/.npm:rw"
+    # Note: /build is reserved for Nix internal use and cannot be used.
+    - "$HOME/.npm:/home/.npm:rw"
   env:
-    - XDG_CACHE_HOME=/build/.cache
-    - XDG_DATA_HOME=/build/.local/share
-    - XDG_STATE_HOME=/build/.local/state
+    - XDG_CACHE_HOME=/home/.cache
+    - XDG_DATA_HOME=/home/.local/share
+    - XDG_STATE_HOME=/home/.local/state

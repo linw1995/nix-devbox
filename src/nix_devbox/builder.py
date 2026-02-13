@@ -58,16 +58,22 @@ def build_image(
 def _run_nix_build(temp_dir: str, verbose: bool) -> None:
     """Run nix build command."""
     cmd = ["nix", "build", "--impure", ".#image"]
+    if verbose:
+        cmd.extend(["-vv", "--print-build-logs"])
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=temp_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if verbose and result.stdout:
-            logger.debug("nix build output:\n%s", result.stdout)
+        if verbose:
+            # In verbose mode, show output in real-time
+            subprocess.run(cmd, cwd=temp_dir, check=True)
+        else:
+            result = subprocess.run(
+                cmd,
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if result.stdout:
+                logger.debug("nix build output:\n%s", result.stdout)
     except subprocess.CalledProcessError as exc:
         stderr_info = f":\n{exc.stderr}" if exc.stderr else ""
         raise BuildError(

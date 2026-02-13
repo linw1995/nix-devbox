@@ -35,10 +35,12 @@ run:
       max-file: "3"
 
   # Default environment variables
+  # Note: /build is reserved for Nix internal use and cannot be used.
   env:
     - TERM=xterm-256color
     - EDITOR=nvim
-    - XDG_CONFIG_HOME=/build/.config
-    - XDG_DATA_HOME=/build/.local/share
-    - XDG_CACHE_HOME=/build/.cache
-    - XDG_STATE_HOME=/build/.local/state
+    - HOME=/home
+    - XDG_CONFIG_HOME=/home/.config
+    - XDG_DATA_HOME=/home/.local/share
+    - XDG_CACHE_HOME=/home/.cache
+    - XDG_STATE_HOME=/home/.local/state

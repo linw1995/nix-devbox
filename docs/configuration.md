@@ -34,8 +34,8 @@ run:
     - "8080:8080"
 
   # Volume mounts (environment variables supported)
+  # Note: /build and its subpaths are reserved for Nix internal use.
   volumes:
-    - ".:/workspace"
     - "$HOME/.config:/root/.config"
 
   # tmpfs mounts
