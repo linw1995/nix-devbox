@@ -283,6 +283,29 @@ def find_config(start_path: Path) -> DevboxConfig:
     return DevboxConfig()
 
 
+def find_config_in_directory(directory: Path) -> DevboxConfig:
+    """Find and load devbox configuration from a directory.
+
+    Searches for configuration files in the specified directory:
+    1. devbox.yaml
+    2. .devbox.yaml
+    3. devbox.yml
+    4. .devbox.yml
+
+    Args:
+        directory: Directory to search for configuration files
+
+    Returns:
+        DevboxConfig instance (empty config if no file found)
+    """
+    for filename in CONFIG_FILE_NAMES:
+        config_path = directory / filename
+        if config_path.exists():
+            return DevboxConfig.from_file(config_path)
+
+    return DevboxConfig()
+
+
 def merge_devbox_configs(configs: list[DevboxConfig]) -> DevboxConfig:
     """Merge multiple DevboxConfigs into one.
 

@@ -93,3 +93,40 @@ run:
 # project1 + project2 配置自动合并
 nix-devbox run ./project1 ./project2
 ```
+
+## 工作目录配置
+
+运行 nix-devbox 时，它会自动从**当前工作目录**（你运行命令的目录）加载 `devbox.yaml`，并具有**最高优先级**。
+
+这允许你在不修改远程 flake 的情况下覆盖其配置：
+
+```bash
+# 使用远程 flake，但用本地 devbox.yaml 覆盖配置
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+```
+
+```yaml
+# ./devbox.yaml（在你的项目根目录）
+run:
+  resources:
+    memory: 2g  # 覆盖远程 flake 的内存限制
+  ports:
+    - "8080:8080"  # 添加额外端口
+  volumes:
+    - ".:/workspace"  # 挂载当前项目
+```
+
+### 配置合并优先级
+
+配置按以下顺序合并（后面的覆盖前面的）：
+
+1. 第一个 flake 的 `devbox.yaml`
+2. 第二个 flake 的 `devbox.yaml`
+3. ...（后续 flakes）
+4. **当前工作目录的 `devbox.yaml`**（最高优先级）
+
+这在以下场景很有用：
+- 覆盖共享 flake 的资源限制
+- 添加项目特定的卷挂载
+- 为本地开发配置端口
+- 设置针对你特定环境的环境变量

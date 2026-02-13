@@ -54,15 +54,21 @@ Provide a safe and stable sandboxed development environment for AI coding agents
 **Quick start for agent development:**
 
 ```bash
-# 1. Create a flake.nix in your project (see examples/base/)
-# 2. Build and run the environment
-nix-devbox run /path/to/project
+# 1. Recommended: Learn to write your own flake devShells
+#    (see: https://nix.dev/tutorials/first-steps/declarative-shell)
+#    Or use the pre-built devShells from this project:
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+
+# 2. Or stack multiple devShells for complex projects
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base' 'github:linw1995/nix-devbox?dir=examples/opencode'
 
 # 3. The agent now has a clean, reproducible environment
 # with all tools pre-installed and configured
 ```
 
-See [examples/stacked-example/](examples/stacked-example/) for a complete stacked devShell setup that combines multiple environments (Python + Node.js + system tools) for AI agent development.
+If your project has a `flake.nix`, append `.` to use it. For project-specific configuration (environment variables, workdir, etc.), create a `devbox.yaml` in your project root. See [docs/configuration.md](docs/configuration.md) for details.
+
+See [examples/stacked-example/](examples/stacked-example/) for a complete stacked devShell setup. Check out [examples/opencode/](examples/opencode/) for the OpenCode agent configuration and contribute your own agent examples!
 
 ## Examples
 

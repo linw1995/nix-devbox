@@ -116,3 +116,40 @@ run:
 Result:
 - `memory: 1g` (overridden)
 - `volumes: [./data:/app/data (proj2), ./cache:/app/cache]`
+
+## Working Directory Config
+
+When running nix-devbox, it automatically loads `devbox.yaml` from your **current working directory** (where you run the command) with the **highest priority**.
+
+This allows you to override configurations from remote flakes without modifying them:
+
+```bash
+# Use remote flake but override with local devbox.yaml
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+```
+
+```yaml
+# ./devbox.yaml (in your project root)
+run:
+  resources:
+    memory: 2g  # Override remote flake's memory limit
+  ports:
+    - "8080:8080"  # Add additional ports
+  volumes:
+    - ".:/workspace"  # Mount current project
+```
+
+### Config Merge Priority
+
+Configurations are merged in this order (later overrides earlier):
+
+1. First flake's `devbox.yaml`
+2. Second flake's `devbox.yaml`
+3. ... (subsequent flakes)
+4. **Current working directory's `devbox.yaml`** (highest priority)
+
+This is useful for:
+- Overriding resource limits from shared flakes
+- Adding project-specific volume mounts
+- Configuring ports for local development
+- Setting environment variables for your specific setup

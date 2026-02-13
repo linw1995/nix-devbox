@@ -17,6 +17,7 @@ from .config import (
     DevboxConfig,
     RunConfig,
     find_config,
+    find_config_in_directory,
     merge_devbox_configs,
 )
 from .core import _validate_mount_point, generate_flake
@@ -228,14 +229,13 @@ def build(
 
 
 def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
-    """Load and merge devbox configs from all flake directories.
+    """Load and merge devbox configs from all flake directories and current directory.
 
-    Configs are merged in order: first flake's config is the base,
-    subsequent configs override/merge with it.
+    Configs are merged in order:
+    1. First flake's config is the base
+    2. Subsequent flake configs override/merge
+    3. Current directory's devbox.yaml (if exists) takes highest priority
     """
-    if not flake_refs:
-        return DevboxConfig()
-
     fetcher = get_flake_fetcher()
 
     # Load config from each flake directory
@@ -256,6 +256,12 @@ def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
                 # Log warning but don't fail - remote flake may not have devbox.yaml
                 logger.warning(f"Could not fetch remote flake {flake_ref.uri.url}: {e}")
                 configs.append(DevboxConfig())
+
+    # Load config from current directory (highest priority)
+    current_dir_config = find_config_in_directory(Path.cwd())
+    if current_dir_config != DevboxConfig():
+        configs.append(current_dir_config)
+
     # Filter out default (empty) configs
     non_default_configs = [cfg for cfg in configs if cfg != DevboxConfig()]
 
@@ -402,6 +408,7 @@ def run(
     command: str | None,
 ) -> None:
     """Run container (auto-builds image if not exists)."""
+
     config = _build_launch_config(
         flakes=flakes,
         output=output,

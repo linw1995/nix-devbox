@@ -54,15 +54,21 @@ nix-devbox build "github:owner/repo?dir=dev"
 **快速开始：**
 
 ```bash
-# 1. 在项目目录中创建 flake.nix（参考 examples/base/）
-# 2. 构建并运行环境
-nix-devbox run /path/to/project
+# 1. 推荐：学习编写自己的 flake devShells
+#    （参考：https://nix.dev/tutorials/first-steps/declarative-shell）
+#    或者直接使用本项目提供的预置 devShells：
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+
+# 2. 或为复杂项目堆叠多个 devShell
+nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base' 'github:linw1995/nix-devbox?dir=examples/opencode'
 
 # 3. AI Agent 现在拥有干净、可复现的开发环境
 # 所有工具已预装并配置完毕
 ```
 
-查看 [examples/stacked-example/](examples/stacked-example/) 获取完整的堆叠 devShell 配置示例，展示了如何组合多个环境（Python + Node.js + 系统工具）用于 AI Agent 开发。
+如果你的项目有 `flake.nix`，可以追加 `.` 来使用它。如需项目特定的配置（环境变量、工作目录等），可在项目根目录创建 `devbox.yaml`。详见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。
+
+查看 [examples/stacked-example/](examples/stacked-example/) 获取完整的堆叠 devShell 配置示例。参考 [examples/opencode/](examples/opencode/) 中的 OpenCode Agent 配置，并贡献你自己的 Agent 示例！
 
 ## 示例
 
