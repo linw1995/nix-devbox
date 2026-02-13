@@ -173,3 +173,73 @@ registry:
 ```
 
 **注意**：自定义 registry 条目会覆盖同名的内置 registry。
+
+## Extends（继承）
+
+`extends` 字段允许你声明依赖的其他 flake，在运行 `nix-devbox run .` 或 `nix-devbox build .` 时自动合并。
+
+### 基本用法
+
+```yaml
+# devbox.yaml
+extends:
+  - @nix-devbox/base
+  - @nix-devbox/opencode
+
+run:
+  resources:
+    memory: 2g
+```
+
+运行：
+```bash
+nix-devbox run .
+```
+
+等价于：
+```bash
+nix-devbox run @nix-devbox/base @nix-devbox/opencode .
+```
+
+### 工作原理
+
+1. **先解析 extends** - `extends` 中的所有 registry 引用被展开为完整 URL
+2. **追加当前目录** - `.`（当前目录）自动添加到最后
+3. **合并配置** - 所有 devbox.yaml 配置按顺序合并：
+   1. 第一个继承的 flake 配置
+   2. 第二个继承的 flake 配置
+   3. ...（后续 extends）
+   4. **当前目录的配置**（最高优先级）
+
+### 使用场景
+
+**项目配置，无需长命令：**
+```yaml
+# devbox.yaml
+extends:
+  - @nix-devbox/python
+  - @nix-devbox/nodejs
+
+run:
+  ports:
+    - "3000:3000"
+    - "8000:8000"
+```
+```bash
+# 简单命令，复杂环境
+nix-devbox run .
+```
+
+**与 CLI flakes 组合：**
+```bash
+# extends 自动添加
+nix-devbox run . /path/to/another/flake
+# 等价于：nix-devbox run @extends1 @extends2 . /path/to/another/flake
+```
+
+**混合 registry 和普通引用：**
+```yaml
+extends:
+  - @nix-devbox/base
+  - github:other/user/repo?dir=tools
+```

@@ -232,6 +232,36 @@ def _resolve_registry_ref(ref: str, registry: dict[str, str]) -> str:
     return base_url
 
 
+def _expand_extends(
+    flakes: tuple[str, ...], devbox_config: DevboxConfig
+) -> tuple[str, ...]:
+    """Expand extends from devbox.yaml into flake references.
+
+    If current directory has extends defined, prepend them to the flakes list.
+
+    Args:
+        flakes: Original flake references from CLI
+        devbox_config: Loaded devbox configuration
+
+    Returns:
+        Expanded tuple with extends first, then original flakes
+    """
+    if not devbox_config.extends:
+        return flakes
+
+    # Resolve extends using registry
+    resolved_extends = []
+    for ext in devbox_config.extends:
+        if ext.startswith("@"):
+            resolved = _resolve_registry_ref(ext, devbox_config.get_registry())
+            resolved_extends.append(resolved)
+        else:
+            resolved_extends.append(ext)
+
+    # Combine: extends first, then original flakes
+    return tuple(resolved_extends) + flakes
+
+
 def _execute_build(
     flakes: tuple[str, ...],
     output: str,
@@ -244,8 +274,11 @@ def _execute_build(
     actual_output = output() if callable(output) else output
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
 
-    # Load devbox config first (for registry resolution)
+    # Load devbox config first (for registry resolution and extends)
     devbox_config = find_config_in_directory(Path.cwd())
+
+    # Expand extends if present
+    flakes = _expand_extends(flakes, devbox_config)
 
     # Resolve flake refs (including registry references)
     flake_refs = _resolve_flake_refs(flakes, devbox_config)
@@ -373,8 +406,11 @@ def _build_launch_config(
     """Build container launch configuration from CLI arguments."""
     actual_output = output() if callable(output) else output
 
-    # Load devbox config first (for registry resolution)
+    # Load devbox config first (for registry resolution and extends)
     devbox_config = find_config_in_directory(Path.cwd())
+
+    # Expand extends if present
+    flakes = _expand_extends(flakes, devbox_config)
 
     # Resolve flake refs (including registry references)
     flake_refs = _resolve_flake_refs(flakes, devbox_config)

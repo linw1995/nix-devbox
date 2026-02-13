@@ -196,3 +196,73 @@ registry:
 ```
 
 **Note**: Custom registry entries override built-in ones if they have the same name.
+
+## Extends
+
+The `extends` field allows you to declare dependencies on other flakes that should be merged automatically when running `nix-devbox run .` or `nix-devbox build .`.
+
+### Basic Usage
+
+```yaml
+# devbox.yaml
+extends:
+  - @nix-devbox/base
+  - @nix-devbox/opencode
+
+run:
+  resources:
+    memory: 2g
+```
+
+When you run:
+```bash
+nix-devbox run .
+```
+
+It is equivalent to:
+```bash
+nix-devbox run @nix-devbox/base @nix-devbox/opencode .
+```
+
+### How It Works
+
+1. **Extends are resolved first** - All registry references in `extends` are expanded to full URLs
+2. **Current directory is appended** - The `.` (current directory) is automatically added at the end
+3. **Configs are merged** - All devbox.yaml configurations are merged in order:
+   1. First extended flake's config
+   2. Second extended flake's config
+   3. ... (subsequent extends)
+   4. **Current directory's config** (highest priority)
+
+### Use Cases
+
+**Project setup without long command lines:**
+```yaml
+# devbox.yaml
+extends:
+  - @nix-devbox/python
+  - @nix-devbox/nodejs
+
+run:
+  ports:
+    - "3000:3000"
+    - "8000:8000"
+```
+```bash
+# Simple command, complex environment
+nix-devbox run .
+```
+
+**Combining with CLI flakes:**
+```bash
+# Extends are automatically added
+nix-devbox run . /path/to/another/flake
+# Equivalent to: nix-devbox run @extends1 @extends2 . /path/to/another/flake
+```
+
+**Mixing registry and regular references:**
+```yaml
+extends:
+  - @nix-devbox/base
+  - github:other/user/repo?dir=tools
+```

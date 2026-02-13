@@ -230,6 +230,7 @@ class DevboxConfig:
     run: RunConfig = field(default_factory=RunConfig)
     init: InitConfig = field(default_factory=InitConfig)
     registry: dict[str, str] = field(default_factory=dict)
+    extends: list[str] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: Path) -> "DevboxConfig":
@@ -260,11 +261,13 @@ class DevboxConfig:
         run_data = data.get("run", {})
         init_data = data.get("init", {})
         registry_data = data.get("registry", {})
+        extends_data = data.get("extends", [])
 
         return cls(
             run=_parse_run_config(run_data),
             init=_parse_init_config(init_data),
             registry=registry_data if isinstance(registry_data, dict) else {},
+            extends=extends_data if isinstance(extends_data, list) else [],
         )
 
     def get_registry(self) -> dict[str, str]:
