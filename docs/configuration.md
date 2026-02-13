@@ -206,8 +206,8 @@ The `extends` field allows you to declare dependencies on other flakes that shou
 ```yaml
 # devbox.yaml
 extends:
-  - @nix-devbox/base
-  - @nix-devbox/opencode
+  - "@nix-devbox/base"
+  - "@nix-devbox/opencode"
 
 run:
   resources:
@@ -240,8 +240,8 @@ nix-devbox run @nix-devbox/base @nix-devbox/opencode .
 ```yaml
 # devbox.yaml
 extends:
-  - @nix-devbox/python
-  - @nix-devbox/nodejs
+  - "@nix-devbox/base"
+  - "@nix-devbox/nodejs"
 
 run:
   ports:
@@ -263,6 +263,6 @@ nix-devbox run . /path/to/another/flake
 **Mixing registry and regular references:**
 ```yaml
 extends:
-  - @nix-devbox/base
-  - github:other/user/repo?dir=tools
+  - "@nix-devbox/base"
+  - "github:other/user/repo?dir=tools"
 ```
