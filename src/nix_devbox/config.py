@@ -17,6 +17,11 @@ CONFIG_FILE_NAMES = ("devbox.yaml", ".devbox.yaml", "devbox.yml", ".devbox.yml")
 # Docker defaults
 DEFAULT_LOG_DRIVER = "json-file"
 
+# Default registry entries (built-in)
+DEFAULT_REGISTRY: dict[str, str] = {
+    "nix-devbox": "github:linw1995/nix-devbox?dir=examples/",
+}
+
 
 @dataclass(frozen=True)
 class SecurityConfig:
@@ -224,6 +229,7 @@ class DevboxConfig:
 
     run: RunConfig = field(default_factory=RunConfig)
     init: InitConfig = field(default_factory=InitConfig)
+    registry: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: Path) -> "DevboxConfig":
@@ -253,11 +259,69 @@ class DevboxConfig:
         """Create DevboxConfig from a dictionary."""
         run_data = data.get("run", {})
         init_data = data.get("init", {})
+        registry_data = data.get("registry", {})
 
         return cls(
             run=_parse_run_config(run_data),
             init=_parse_init_config(init_data),
+            registry=registry_data if isinstance(registry_data, dict) else {},
         )
+
+    def get_registry(self) -> dict[str, str]:
+        """Get merged registry with defaults.
+
+        Project registry entries override defaults.
+
+        Returns:
+            Dictionary mapping registry names to URLs
+        """
+        merged = dict(DEFAULT_REGISTRY)
+        merged.update(self.registry)
+        return merged
+
+    def resolve_registry(self, ref: str) -> str:
+        """Resolve a registry reference to full URL.
+
+        Args:
+            ref: Registry reference like "@name/path" or "@name"
+
+        Returns:
+            Full flake URL
+
+        Raises:
+            ValueError: If registry name is not found
+        """
+        if not ref.startswith("@"):
+            return ref
+
+        # Remove @ prefix
+        ref = ref[1:]
+
+        # Split into name and path
+        if "/" in ref:
+            name, path = ref.split("/", 1)
+        else:
+            name = ref
+            path = ""
+
+        registry = self.get_registry()
+        if name not in registry:
+            raise ValueError(
+                f"Unknown registry '{name}'. Available: {', '.join(registry.keys())}"
+            )
+
+        base_url = registry[name]
+
+        # Append path to base URL
+        if path:
+            # Handle ?dir= parameter in base URL
+            if "?dir=" in base_url:
+                base_part, dir_part = base_url.split("?dir=", 1)
+                return f"{base_part}?dir={dir_part}{path}"
+            else:
+                return f"{base_url}{path}"
+
+        return base_url
 
 
 def find_config(start_path: Path) -> DevboxConfig:

@@ -14,6 +14,7 @@ import click
 from . import __version__ as VERSION
 from .builder import build_image, image_exists, run_container
 from .config import (
+    DEFAULT_REGISTRY,
     DevboxConfig,
     RunConfig,
     find_config,
@@ -162,6 +163,75 @@ def cli(ctx: "Context") -> None:
         click.echo(ctx.get_help())
 
 
+def _resolve_flake_refs(
+    flakes: tuple[str, ...], devbox_config: DevboxConfig | None = None
+) -> list[FlakeRef]:
+    """Resolve flake references, expanding registry references.
+
+    Args:
+        flakes: Raw flake references from CLI
+        devbox_config: Optional devbox config for registry resolution
+
+    Returns:
+        List of resolved FlakeRef objects
+    """
+    # Get registry from config or use empty
+    registry = devbox_config.get_registry() if devbox_config else dict(DEFAULT_REGISTRY)
+
+    resolved_refs = []
+    for ref in flakes:
+        if ref.startswith("@"):
+            # Registry reference - resolve it
+            resolved_url = _resolve_registry_ref(ref, registry)
+            resolved_refs.append(FlakeRef.parse(resolved_url))
+        else:
+            # Regular flake reference
+            resolved_refs.append(FlakeRef.parse(ref))
+
+    return resolved_refs
+
+
+def _resolve_registry_ref(ref: str, registry: dict[str, str]) -> str:
+    """Resolve a registry reference to full URL.
+
+    Args:
+        ref: Registry reference like "@name/path" or "@name"
+        registry: Registry dictionary mapping names to URLs
+
+    Returns:
+        Full flake URL
+
+    Raises:
+        DevboxError: If registry name is not found
+    """
+    # Remove @ prefix
+    ref = ref[1:]
+
+    # Split into name and path
+    if "/" in ref:
+        name, path = ref.split("/", 1)
+    else:
+        name = ref
+        path = ""
+
+    if name not in registry:
+        available = ", ".join(registry.keys())
+        raise DevboxError(f"Unknown registry '{name}'. Available: {available}")
+
+    base_url = registry[name]
+
+    # Append path to base URL
+    if path:
+        # Handle ?dir= parameter in base URL
+        if "?dir=" in base_url:
+            base_part, dir_part = base_url.split("?dir=", 1)
+            return f"{base_part}?dir={dir_part}{path}"
+        else:
+            return f"{base_url}{path}"
+
+    return base_url
+
+
 def _execute_build(
     flakes: tuple[str, ...],
     output: str,
@@ -173,13 +243,18 @@ def _execute_build(
     """Execute Docker image build with parsed arguments."""
     actual_output = output() if callable(output) else output
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
-    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
+
+    # Load devbox config first (for registry resolution)
+    devbox_config = find_config_in_directory(Path.cwd())
+
+    # Resolve flake refs (including registry references)
+    flake_refs = _resolve_flake_refs(flakes, devbox_config)
 
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
-    # Load devbox config and collect mount points
-    devbox_config = _load_devbox_config(flake_refs)
+    # Reload devbox config with all flake configs
+    devbox_config = _load_devbox_config(flake_refs, devbox_config)
     mount_points: list[str] = []
     if devbox_config:
         # Extract container paths from volumes
@@ -228,18 +303,23 @@ def build(
         raise click.ClickException(str(exc)) from exc
 
 
-def _load_devbox_config(flake_refs: list[FlakeRef]) -> DevboxConfig:
+def _load_devbox_config(
+    flake_refs: list[FlakeRef], base_config: DevboxConfig | None = None
+) -> DevboxConfig:
     """Load and merge devbox configs from all flake directories and current directory.
 
     Configs are merged in order:
     1. First flake's config is the base
     2. Subsequent flake configs override/merge
     3. Current directory's devbox.yaml (if exists) takes highest priority
+    4. Optional base_config is used as starting point (includes project registry)
     """
     fetcher = get_flake_fetcher()
 
+    # Start with base config if provided
+    configs = [base_config] if base_config else []
+
     # Load config from each flake directory
-    configs = []
     for flake_ref in flake_refs:
         if flake_ref.uri.is_local:
             # Extract the actual path from path:/absolute/path format
@@ -292,8 +372,15 @@ def _build_launch_config(
 ) -> ContainerLaunchConfig:
     """Build container launch configuration from CLI arguments."""
     actual_output = output() if callable(output) else output
-    flake_refs = [FlakeRef.parse(ref) for ref in flakes]
-    devbox_config = _load_devbox_config(flake_refs)
+
+    # Load devbox config first (for registry resolution)
+    devbox_config = find_config_in_directory(Path.cwd())
+
+    # Resolve flake refs (including registry references)
+    flake_refs = _resolve_flake_refs(flakes, devbox_config)
+
+    # Reload devbox config with all flake configs
+    devbox_config = _load_devbox_config(flake_refs, devbox_config)
 
     return ContainerLaunchConfig(
         image_ref=ImageRef.parse(actual_output, name_override=name, tag_override=tag),

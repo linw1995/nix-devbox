@@ -101,8 +101,8 @@ nix-devbox run ./project1 ./project2
 这允许你在不修改远程 flake 的情况下覆盖其配置：
 
 ```bash
-# 使用远程 flake，但用本地 devbox.yaml 覆盖配置
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+# 使用 registry flake，但用本地 devbox.yaml 覆盖配置
+nix-devbox run @nix-devbox/base
 ```
 
 ```yaml
@@ -130,3 +130,46 @@ run:
 - 添加项目特定的卷挂载
 - 为本地开发配置端口
 - 设置针对你特定环境的环境变量
+
+## Registry（注册表）
+
+`registry` 部分允许你定义常用 flake URL 的简短别名。
+
+### 默认注册表
+
+以下注册表是内置的：
+
+| 名称 | URL |
+|------|-----|
+| `nix-devbox` | `github:linw1995/nix-devbox?dir=examples/` |
+
+### 使用 Registry 引用
+
+使用 `@name/path` 语法引用已注册的 flake：
+
+```bash
+# 等价于：github:linw1995/nix-devbox?dir=examples/base
+nix-devbox run @nix-devbox/base
+
+# 等价于：github:linw1995/nix-devbox?dir=examples/opencode
+nix-devbox run @nix-devbox/opencode
+
+# 混合使用 registry 和普通引用
+nix-devbox run @nix-devbox/base . @other/repo
+```
+
+### 自定义 Registry
+
+在 `devbox.yaml` 中定义你自己的 registry 条目：
+
+```yaml
+registry:
+  myrepo: github:mycompany/flakes?dir=dev/
+  internal: github:mycompany/internal-flakes
+
+# 然后使用：
+# nix-devbox run @myrepo/project
+# nix-devbox run @internal/tools
+```
+
+**注意**：自定义 registry 条目会覆盖同名的内置 registry。

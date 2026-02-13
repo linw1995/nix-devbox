@@ -124,8 +124,8 @@ When running nix-devbox, it automatically loads `devbox.yaml` from your **curren
 This allows you to override configurations from remote flakes without modifying them:
 
 ```bash
-# Use remote flake but override with local devbox.yaml
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+# Use registry flake but override with local devbox.yaml
+nix-devbox run @nix-devbox/base
 ```
 
 ```yaml
@@ -153,3 +153,46 @@ This is useful for:
 - Adding project-specific volume mounts
 - Configuring ports for local development
 - Setting environment variables for your specific setup
+
+## Registry
+
+The `registry` section allows you to define short aliases for frequently used flake URLs.
+
+### Default Registry
+
+The following registry is built-in:
+
+| Name | URL |
+|------|-----|
+| `nix-devbox` | `github:linw1995/nix-devbox?dir=examples/` |
+
+### Using Registry References
+
+Use `@name/path` syntax to reference registered flakes:
+
+```bash
+# Equivalent to: github:linw1995/nix-devbox?dir=examples/base
+nix-devbox run @nix-devbox/base
+
+# Equivalent to: github:linw1995/nix-devbox?dir=examples/opencode
+nix-devbox run @nix-devbox/opencode
+
+# Mix registry and regular references
+nix-devbox run @nix-devbox/base . @other/repo
+```
+
+### Custom Registry
+
+Define your own registry entries in `devbox.yaml`:
+
+```yaml
+registry:
+  myrepo: github:mycompany/flakes?dir=dev/
+  internal: github:mycompany/internal-flakes
+
+# Then use them:
+# nix-devbox run @myrepo/project
+# nix-devbox run @internal/tools
+```
+
+**Note**: Custom registry entries override built-in ones if they have the same name.

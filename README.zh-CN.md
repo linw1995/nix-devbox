@@ -57,10 +57,10 @@ nix-devbox build "github:owner/repo?dir=dev"
 # 1. 推荐：学习编写自己的 flake devShells
 #    （参考：https://nix.dev/tutorials/first-steps/declarative-shell）
 #    或者直接使用本项目提供的预置 devShells：
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+nix-devbox run @nix-devbox/base
 
 # 2. 或为复杂项目堆叠多个 devShell
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base' 'github:linw1995/nix-devbox?dir=examples/opencode'
+nix-devbox run @nix-devbox/base @nix-devbox/opencode
 
 # 3. AI Agent 现在拥有干净、可复现的开发环境
 # 所有工具已预装并配置完毕

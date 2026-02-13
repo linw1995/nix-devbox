@@ -57,10 +57,10 @@ Provide a safe and stable sandboxed development environment for AI coding agents
 # 1. Recommended: Learn to write your own flake devShells
 #    (see: https://nix.dev/tutorials/first-steps/declarative-shell)
 #    Or use the pre-built devShells from this project:
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base'
+nix-devbox run @nix-devbox/base
 
 # 2. Or stack multiple devShells for complex projects
-nix-devbox run 'github:linw1995/nix-devbox?dir=examples/base' 'github:linw1995/nix-devbox?dir=examples/opencode'
+nix-devbox run @nix-devbox/base @nix-devbox/opencode
 
 # 3. The agent now has a clean, reproducible environment
 # with all tools pre-installed and configured
