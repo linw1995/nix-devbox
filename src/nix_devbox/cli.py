@@ -364,6 +364,9 @@ def _load_devbox_config(
             # For remote URLs, fetch the flake and look for devbox.yaml
             try:
                 flake_path = fetcher.fetch(flake_ref.uri.url)
+                # If subdir is specified, look for devbox.yaml in the subdir
+                if flake_ref.uri.subdir:
+                    flake_path = flake_path / flake_ref.uri.subdir
                 configs.append(find_config(flake_path / "flake.nix"))
             except RuntimeError as e:
                 # Log warning but don't fail - remote flake may not have devbox.yaml
