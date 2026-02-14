@@ -1,0 +1,3 @@
+extends:
+  - "@nix-devbox/base"
+  - "@nix-devbox/opencode"

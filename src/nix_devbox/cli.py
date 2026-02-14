@@ -372,8 +372,9 @@ def _load_devbox_config(
                 if flake_ref.uri.subdir:
                     flake_path = flake_path / flake_ref.uri.subdir
                 configs.append(find_config(flake_path / "flake.nix"))
-            except RuntimeError as e:
+            except (RuntimeError, FileNotFoundError) as e:
                 # Log warning but don't fail - remote flake may not have devbox.yaml
+                # FileNotFoundError: nix command not available (e.g., in dry-run mode without nix)
                 logger.warning(f"Could not fetch remote flake {flake_ref.uri.url}: {e}")
                 configs.append(DevboxConfig())
 
@@ -470,17 +471,23 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
         # Add ensure_dirs from init config
         mount_points.extend(config.devbox_config.init.ensure_dirs)
 
-    _ensure_image_exists(
-        flake_refs=config.flake_refs,
-        image_ref=config.image_ref,
-        force_rebuild=config.rebuild,
-        verbose=config.verbose,
-        mount_points=mount_points if mount_points else None,
-    )
+    # Skip image check/build in dry-run mode
+    if not config.dry_run:
+        _ensure_image_exists(
+            flake_refs=config.flake_refs,
+            image_ref=config.image_ref,
+            force_rebuild=config.rebuild,
+            verbose=config.verbose,
+            mount_points=mount_points if mount_points else None,
+        )
     _run_container_with_config(config)
 
 
-@cli.command()
+@cli.command(
+    context_settings=dict(
+        allow_extra_args=True,
+    )
+)
 @click.argument("flakes", nargs=-1, required=True)
 @click.option(
     "-o",
@@ -521,7 +528,6 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
 @click.option("--rebuild", is_flag=True, help="Force rebuild image")
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--verbose", "-v", is_flag=True, help="Show verbose output")
-@click.option("--command", "--cmd", help="Command to execute in container (quote it)")
 @click.pass_context
 def run(
     ctx: "Context",
@@ -540,12 +546,32 @@ def run(
     rebuild: bool,
     dry_run: bool,
     verbose: bool,
-    command: str | None,
 ) -> None:
-    """Run container (auto-builds image if not exists)."""
+    """Run container (auto-builds image if not exists).
+
+    Use -- to pass arguments to the container command:
+        nix-devbox run /path/to/flake -- ls -la
+        nix-devbox run /path/to/flake -- python script.py
+    """
+    # Separate flakes from command using -- as delimiter
+    # We check sys.argv to find -- because Click doesn't include it in flakes when using nargs=-1
+    import sys
+
+    if "--" in sys.argv:
+        sep_index = sys.argv.index("--")
+        # Everything after -- is the command
+        cmd_args = sys.argv[sep_index + 1 :]
+        command = " ".join(cmd_args) if cmd_args else None
+    else:
+        command = None
+
+    if not flakes:
+        raise click.UsageError("At least one flake reference is required")
+
+    actual_flakes = flakes
 
     config = _build_launch_config(
-        flakes=flakes,
+        flakes=actual_flakes,
         output=output,
         name=name,
         tag=tag,
