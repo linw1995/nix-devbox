@@ -486,6 +486,7 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
 @cli.command(
     context_settings=dict(
         allow_extra_args=True,
+        allow_interspersed_args=False,
     )
 )
 @click.argument("flakes", nargs=-1, required=True)
@@ -553,22 +554,19 @@ def run(
         nix-devbox run /path/to/flake -- ls -la
         nix-devbox run /path/to/flake -- python script.py
     """
-    # Separate flakes from command using -- as delimiter
-    # We check sys.argv to find -- because Click doesn't include it in flakes when using nargs=-1
-    import sys
-
-    if "--" in sys.argv:
-        sep_index = sys.argv.index("--")
-        # Everything after -- is the command
-        cmd_args = sys.argv[sep_index + 1 :]
+    # With allow_interspersed_args=False, Click preserves -- in the positional args
+    # So we can find -- in flakes and split there
+    if "--" in flakes:
+        sep_index = flakes.index("--")
+        cmd_args = flakes[sep_index + 1 :]
         command = " ".join(cmd_args) if cmd_args else None
+        actual_flakes = flakes[:sep_index]
     else:
         command = None
+        actual_flakes = flakes
 
-    if not flakes:
+    if not actual_flakes:
         raise click.UsageError("At least one flake reference is required")
-
-    actual_flakes = flakes
 
     config = _build_launch_config(
         flakes=actual_flakes,
