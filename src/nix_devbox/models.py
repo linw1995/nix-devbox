@@ -173,13 +173,12 @@ class FlakeRef:
 
     @property
     def shell_attr(self) -> str:
-        """Return the full shell attribute path.
+        """Return the shell attribute path.
 
-        For remote flakes with subdir, prepends the subdir to the shell path.
+        Note: subdir is handled in the flake URL (?dir= parameter),
+        so the input already points to the correct flake directory.
+        No need to prepend subdir to the shell path.
         """
-        if self.uri.subdir:
-            # subdir like "dev" + shell "devShells.default" -> "dev.devShells.default"
-            return f"{self.uri.subdir}.{self.shell}"
         return self.shell
 
     @classmethod
