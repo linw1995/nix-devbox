@@ -38,7 +38,7 @@
 
             packages = with pkgs; [
               prek
-              dive
+              python314
             ];
           };
         };
