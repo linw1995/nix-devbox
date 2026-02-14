@@ -53,9 +53,11 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
 
       # Run as the same uid/gid used during build
       if [ $# -eq 0 ]; then
+        # Interactive shell - source the rcfile to activate devshell
         exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> ${pkgs.bashInteractive}/bin/bash --rcfile "$rcfile"
       else
-        exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> "$@"
+        # Execute command with devshell environment
+        exec ${pkgs.gosu}/bin/gosu <<UID>>:<<GID>> ${pkgs.bashInteractive}/bin/bash -c 'source "$1"; shift; exec "$@"' _ "$rcfile" "$@"
       fi
     '';
 
