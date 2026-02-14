@@ -271,9 +271,6 @@ def _execute_build(
     dry_run: bool = False,
 ) -> None:
     """Execute Docker image build with parsed arguments."""
-    actual_output = output() if callable(output) else output
-    image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
-
     # Load devbox config first (for registry resolution and extends)
     devbox_config = find_config_in_directory(Path.cwd())
 
@@ -282,6 +279,13 @@ def _execute_build(
 
     # Resolve flake refs (including registry references)
     flake_refs = _resolve_flake_refs(flakes, devbox_config)
+
+    # Use configured image name as default if available
+    actual_output = output() if callable(output) else output
+    if devbox_config.image and not name and actual_output == _get_default_image_name():
+        actual_output = devbox_config.image
+
+    image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
 
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
@@ -310,7 +314,7 @@ def _execute_build(
     "-o",
     "--output",
     default=_get_default_image_name,
-    help="Output image name and tag (default: <dirname>-dev:latest)",
+    help="Output image name and tag (default: <dirname>-dev:latest, or image from devbox.yaml)",
     metavar="name:tag",
 )
 @click.option("-n", "--name", help="Output image name (overrides --output)")
@@ -421,8 +425,13 @@ def _build_launch_config(
     # Reload devbox config with all flake configs
     devbox_config = _load_devbox_config(flake_refs, devbox_config)
 
+    # Use configured image name as default if available and no CLI override
+    final_output = actual_output
+    if devbox_config.image and not name and actual_output == _get_default_image_name():
+        final_output = devbox_config.image
+
     return ContainerLaunchConfig(
-        image_ref=ImageRef.parse(actual_output, name_override=name, tag_override=tag),
+        image_ref=ImageRef.parse(final_output, name_override=name, tag_override=tag),
         flake_refs=flake_refs,
         container_name=container_name,
         ports=list(port),
@@ -477,7 +486,7 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
     "-o",
     "--output",
     default=_get_default_image_name,
-    help="Image name and tag (default: <dirname>-dev:latest)",
+    help="Image name and tag (default: <dirname>-dev:latest, or image from devbox.yaml)",
     metavar="name:tag",
 )
 @click.option("-n", "--name", help="Image name (overrides --output)")

@@ -292,6 +292,34 @@ class TestMergeDevboxConfigs:
         assert "3000:3000" in merged.run.ports
         assert "KEY=value" in merged.run.env
 
+    def test_image_override(self):
+        """Later config's image should override earlier config's image."""
+        base = DevboxConfig.from_dict({"image": "base-image:latest"})
+        override = DevboxConfig.from_dict({"image": "override-image:v2"})
+
+        merged = _merge_two_configs(base, override)
+
+        assert merged.image == "override-image:v2"
+
+    def test_image_inheritance(self):
+        """If override doesn't specify image, base's image should be used."""
+        base = DevboxConfig.from_dict({"image": "base-image:latest"})
+        override = DevboxConfig.from_dict({"run": {"resources": {"memory": "1g"}}})
+
+        merged = _merge_two_configs(base, override)
+
+        assert merged.image == "base-image:latest"
+
+    def test_multiple_configs_image_merge(self):
+        """Image from last config should take precedence."""
+        config1 = DevboxConfig.from_dict({"image": "image1:v1"})
+        config2 = DevboxConfig.from_dict({"run": {"resources": {"memory": "512m"}}})
+        config3 = DevboxConfig.from_dict({"image": "image3:v3"})
+
+        merged = merge_devbox_configs([config1, config2, config3])
+
+        assert merged.image == "image3:v3"
+
 
 class TestMergeInitConfig:
     """Tests for init configuration merging."""

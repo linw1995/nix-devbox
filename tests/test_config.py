@@ -216,6 +216,41 @@ run:
         assert cfg.run.security.no_new_privileges is True
         assert cfg.run.resources.memory == "256m"
 
+    def test_from_dict_with_image(self):
+        data = {
+            "image": "my-project:latest",
+            "run": {
+                "resources": {"memory": "512m"},
+            },
+        }
+        cfg = DevboxConfig.from_dict(data)
+        assert cfg.image == "my-project:latest"
+        assert cfg.run.resources.memory == "512m"
+
+    def test_from_dict_without_image(self):
+        data = {
+            "run": {
+                "resources": {"memory": "512m"},
+            },
+        }
+        cfg = DevboxConfig.from_dict(data)
+        assert cfg.image is None
+        assert cfg.run.resources.memory == "512m"
+
+    def test_from_file_with_image(self, tmp_path: Path):
+        config_file = tmp_path / "devbox.yaml"
+        config_file.write_text(
+            """
+image: "my-custom-image:v1.0"
+run:
+  resources:
+    memory: "256m"
+"""
+        )
+        cfg = DevboxConfig.from_file(config_file)
+        assert cfg.image == "my-custom-image:v1.0"
+        assert cfg.run.resources.memory == "256m"
+
 
 class TestFindConfig:
     """Tests for find_config function."""
