@@ -19,12 +19,18 @@
         devShells = {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              coreutils
+              # shell
               bash
+
+              # essential cli
+              coreutils
               busybox
 
               # editor
               neovim
+
+              # tools
+              git
 
               # for terminfo
               ncurses
