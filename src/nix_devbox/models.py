@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
+
 DEFAULT_TAG = "latest"
 
 # Flake shell attribute patterns
@@ -24,6 +26,46 @@ USER_MOUNT_BASE = "/home"
 # Mapping for reserved paths: reserved_path -> alternative_path
 # e.g., /build/.config -> /home/.config
 RESERVED_PATH_MAPPING = "/home"
+
+
+@dataclass(frozen=True)
+class VersionInfo:
+    """Version information to embed in Docker image."""
+
+    version: str
+    commit_sha: str | None
+
+    @classmethod
+    def create(cls, flake_refs: list["FlakeRef"]) -> "VersionInfo":
+        """Create VersionInfo from flake references.
+
+        Args:
+            flake_refs: List of flake references (unused, kept for API compatibility)
+
+        Returns:
+            VersionInfo instance with version and commit
+        """
+        commit_sha = _get_git_commit_sha()
+
+        return cls(
+            version=__version__,
+            commit_sha=commit_sha,
+        )
+
+
+def _get_git_commit_sha() -> str | None:
+    """Get the current git commit SHA if available."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
 
 # Known flake URL schemes
 REMOTE_SCHEMES = frozenset(

@@ -104,6 +104,38 @@ def image_exists(image_ref: "ImageRef") -> bool:
         return False
 
 
+def get_image_labels(image_ref: "ImageRef") -> dict[str, str]:
+    """Get labels from a Docker image.
+
+    Args:
+        image_ref: Image reference
+
+    Returns:
+        Dictionary of label key-value pairs
+    """
+    import json
+
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Config.Labels}}",
+                str(image_ref),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if result.stdout.strip():
+            labels = json.loads(result.stdout.strip())
+            return labels if labels else {}
+    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {}
+
+
 def run_container(
     image_ref: "ImageRef",
     *,

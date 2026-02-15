@@ -7,6 +7,7 @@ from .models import (
     RESERVED_PATHS,
     FlakeRef,
     ImageRef,
+    VersionInfo,
 )
 
 # flake.nix template constants
@@ -89,6 +90,10 @@ _FLAKE_IMAGE_PACKAGE_TEMPLATE = """
         Entrypoint = [ "/bin/entrypoint" ];
         Cmd = [];
         WorkingDir = "<<WORKDIR>>";
+        Labels = {
+          "dev.nixdevbox.version" = "<<VERSION>>";
+          "dev.nixdevbox.commit" = "<<COMMIT>>";
+        };
       };
     };
   in {
@@ -226,6 +231,7 @@ def _generate_extra_commands(mount_points: list[str], uid: int, gid: int) -> str
 def generate_flake(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
+    version_info: VersionInfo,
     mount_points: list[str] | None = None,
 ) -> str:
     """Generate flake.nix content from flake references."""
@@ -274,6 +280,8 @@ def generate_flake(
     image_package = image_package.replace("<<GID>>", gid_str)
     image_package = image_package.replace("<<WORKDIR>>", DEFAULT_WORKDIR)
     image_package = image_package.replace("<<EXTRA_COMMANDS>>", extra_commands)
+    image_package = image_package.replace("<<VERSION>>", version_info.version)
+    image_package = image_package.replace("<<COMMIT>>", version_info.commit_sha or "")
 
     lines.append(image_package)
 

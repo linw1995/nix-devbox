@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import click
 
 from . import __version__ as VERSION
-from .builder import build_image, image_exists, run_container
+from .builder import build_image, get_image_labels, image_exists, run_container
 from .config import (
     DEFAULT_REGISTRY,
     DevboxConfig,
@@ -23,7 +23,7 @@ from .config import (
 )
 from .core import _validate_mount_point, generate_flake
 from .exceptions import DevboxError
-from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef, get_flake_fetcher
+from .models import DEFAULT_WORKDIR, FlakeRef, ImageRef, VersionInfo, get_flake_fetcher
 from .utils import extract_part_by_separator
 
 if TYPE_CHECKING:
@@ -72,6 +72,7 @@ class ContainerLaunchConfig:
 
     image_ref: ImageRef
     flake_refs: list[FlakeRef]
+    version_info: VersionInfo
     container_name: str | None = None
     ports: list[str] = field(default_factory=list)
     volumes: list[str] = field(default_factory=list)
@@ -99,6 +100,7 @@ def format_flake_refs(refs: list[FlakeRef]) -> str:
 def build_image_with_progress(
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
+    version_info: VersionInfo,
     verbose: bool,
     dry_run: bool = False,
     mount_points: list[str] | None = None,
@@ -109,6 +111,7 @@ def build_image_with_progress(
     Args:
         flake_refs: List of flake references to merge
         image_ref: Target image reference
+        version_info: Version information to embed in the image
         verbose: Whether to print verbose output
         dry_run: If True, show flake content without building
         mount_points: List of directories to create in image for volume mounts
@@ -116,7 +119,7 @@ def build_image_with_progress(
     Raises:
         DevboxError: If build fails
     """
-    flake_content = generate_flake(flake_refs, image_ref, mount_points)
+    flake_content = generate_flake(flake_refs, image_ref, version_info, mount_points)
 
     if dry_run:
         # Create temp directory without auto-cleanup so user can inspect it
@@ -287,6 +290,8 @@ def _execute_build(
 
     image_ref = ImageRef.parse(actual_output, name_override=name, tag_override=tag)
 
+    version_info = VersionInfo.create(flake_refs)
+
     if verbose or dry_run:
         click.echo(format_flake_refs(flake_refs))
 
@@ -304,7 +309,12 @@ def _execute_build(
         mount_points.extend(devbox_config.init.ensure_dirs)
 
     build_image_with_progress(
-        flake_refs, image_ref, verbose, dry_run, mount_points if mount_points else None
+        flake_refs,
+        image_ref,
+        version_info,
+        verbose,
+        dry_run,
+        mount_points if mount_points else None,
     )
 
 
@@ -431,9 +441,12 @@ def _build_launch_config(
     if devbox_config.image and not name and actual_output == _get_default_image_name():
         final_output = devbox_config.image
 
+    version_info = VersionInfo.create(flake_refs)
+
     return ContainerLaunchConfig(
         image_ref=ImageRef.parse(final_output, name_override=name, tag_override=tag),
         flake_refs=flake_refs,
+        version_info=version_info,
         container_name=container_name,
         ports=list(port),
         volumes=list(volume),
@@ -476,6 +489,7 @@ def _execute_run(config: ContainerLaunchConfig) -> None:
         _ensure_image_exists(
             flake_refs=config.flake_refs,
             image_ref=config.image_ref,
+            version_info=config.version_info,
             force_rebuild=config.rebuild,
             verbose=config.verbose,
             mount_points=mount_points if mount_points else None,
@@ -597,6 +611,7 @@ def _ensure_image_exists(
     *,
     flake_refs: list[FlakeRef],
     image_ref: ImageRef,
+    version_info: VersionInfo,
     force_rebuild: bool,
     verbose: bool,
     mount_points: list[str] | None = None,
@@ -605,15 +620,40 @@ def _ensure_image_exists(
     if force_rebuild:
         click.echo(f"Force rebuilding image {image_ref}...")
         build_image_with_progress(
-            flake_refs, image_ref, verbose, mount_points=mount_points
+            flake_refs, image_ref, version_info, verbose, mount_points=mount_points
         )
         return
 
-    if image_exists(image_ref):
+    if not image_exists(image_ref):
+        click.echo(f"Image {image_ref} not found, building...")
+        build_image_with_progress(
+            flake_refs, image_ref, version_info, verbose, mount_points=mount_points
+        )
         return
 
-    click.echo(f"Image {image_ref} not found, building...")
-    build_image_with_progress(flake_refs, image_ref, verbose, mount_points=mount_points)
+    labels = get_image_labels(image_ref)
+    image_version = labels.get("dev.nixdevbox.version")
+
+    diffs: list[str] = []
+
+    if not image_version:
+        diffs.append("version (missing)")
+    elif image_version != version_info.version:
+        diffs.append(f"version ({image_version} -> {version_info.version})")
+
+    if diffs:
+        click.secho(
+            f"⚠️  Image version mismatch detected:\n"
+            f"    - Image built with: nix-devbox v{image_version or 'unknown'}\n"
+            f"    - Current version:   nix-devbox v{version_info.version}\n"
+            f"    - Differences: {', '.join(diffs)}\n"
+            f"\n"
+            f"Run with --rebuild to rebuild the image.",
+            fg="yellow",
+        )
+        return
+
+    return
 
 
 def _make_parser(separator: str, index: int) -> Callable[[str], tuple[str, str]]:
