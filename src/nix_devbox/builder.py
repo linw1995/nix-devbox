@@ -1,9 +1,12 @@
 """Docker image building and container running functionality."""
 
+import hashlib
+import json
 import logging
 import os
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,7 +34,7 @@ def build_image(
     image_ref: "ImageRef",
     temp_dir: str,
     verbose: bool = False,
-) -> None:
+) -> str | None:
     """
     Build and load Docker image from flake.nix content.
 
@@ -40,6 +43,9 @@ def build_image(
         image_ref: Image name and tag reference
         temp_dir: Temporary directory for building
         verbose: Whether to print verbose output
+
+    Returns:
+        Lock hash computed from merge后的 flake.lock, or None
 
     Raises:
         BuildError: If the build fails
@@ -53,6 +59,12 @@ def build_image(
 
     _run_nix_build(temp_dir, verbose)
     _load_docker_image(temp_dir)
+
+    lock_hash = _compute_lock_hash(temp_dir)
+    if lock_hash:
+        _add_labels_after_build(image_ref, lock_hash)
+
+    return lock_hash
 
 
 def _run_nix_build(temp_dir: str, verbose: bool) -> None:
@@ -90,6 +102,50 @@ def _load_docker_image(temp_dir: str) -> None:
         raise DockerError(f"Docker load failed: {exc}") from exc
 
 
+def _compute_lock_hash(temp_dir: str) -> str | None:
+    """Compute MD5 hash of flake.lock file.
+
+    Args:
+        temp_dir: Temporary directory containing the build result
+
+    Returns:
+        MD5 hash string of flake.lock, or None if file doesn't exist
+    """
+    lock_path = Path(temp_dir) / "flake.lock"
+    if not lock_path.exists():
+        return None
+
+    md5 = hashlib.md5()
+    md5.update(lock_path.read_bytes())
+    return md5.hexdigest()
+
+
+def _add_labels_after_build(image_ref: "ImageRef", lock_hash: str) -> None:
+    """Add labels to the built image using a thin FROM layer.
+
+    Args:
+        image_ref: Image reference to add labels to
+        lock_hash: The lock hash to add as a label
+    """
+    dockerfile_content = f"""FROM {image_ref}
+LABEL dev.nixdevbox.lock_hash="{lock_hash}"
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".dockerfile", delete=False) as f:
+        f.write(dockerfile_content)
+        dockerfile_path = f.name
+
+    try:
+        subprocess.run(
+            ["docker", "build", "-t", str(image_ref), "-f", dockerfile_path, "."],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise DockerError(f"Failed to add labels to image: {exc}") from exc
+    finally:
+        os.unlink(dockerfile_path)
+
+
 def image_exists(image_ref: "ImageRef") -> bool:
     """Check if a Docker image exists locally."""
     try:
@@ -113,7 +169,6 @@ def get_image_labels(image_ref: "ImageRef") -> dict[str, str]:
     Returns:
         Dictionary of label key-value pairs
     """
-    import json
 
     try:
         result = subprocess.run(

@@ -34,6 +34,7 @@ class VersionInfo:
 
     version: str
     commit_sha: str | None
+    lock_hash: str | None = None
 
     @classmethod
     def create(cls, flake_refs: list["FlakeRef"]) -> "VersionInfo":

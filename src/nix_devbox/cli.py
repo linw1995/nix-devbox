@@ -1,9 +1,11 @@
 """CLI interface using Click."""
 
+import hashlib
 import logging
 import os
 import re
 import shlex
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +38,51 @@ TEMP_DIR_PREFIX = "nix-devbox."
 # Module logger
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def _get_flake_lock_hash(
+    flake_refs: list[FlakeRef],
+    image_ref: ImageRef,
+    version_info: VersionInfo,
+    mount_points: list[str] | None = None,
+) -> str | None:
+    """Compute MD5 hash of merged flake's lock file.
+
+    Creates a temp directory, generates the merged flake.nix,
+    runs nix flake metadata to create lock file, then computes hash.
+
+    Args:
+        flake_refs: List of flake references
+        image_ref: Image reference (for flake generation)
+        version_info: Version info (for flake generation)
+        mount_points: Mount points (for flake generation)
+
+    Returns:
+        MD5 hash string, or None if failed
+    """
+    with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
+        flake_content = generate_flake(
+            flake_refs, image_ref, version_info, mount_points
+        )
+        flake_path = Path(temp_dir) / "flake.nix"
+        flake_path.write_text(flake_content)
+
+        try:
+            subprocess.run(
+                ["nix", "flake", "metadata", temp_dir],
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            return None
+
+        lock_path = Path(temp_dir) / "flake.lock"
+        if not lock_path.exists():
+            return None
+
+        md5 = hashlib.md5()
+        md5.update(lock_path.read_bytes())
+        return md5.hexdigest()
 
 
 def _sanitize_name_for_docker(value: str) -> str:
@@ -104,7 +151,7 @@ def build_image_with_progress(
     verbose: bool,
     dry_run: bool = False,
     mount_points: list[str] | None = None,
-) -> None:
+) -> str | None:
     """
     Build the Docker image with progress output.
 
@@ -115,6 +162,9 @@ def build_image_with_progress(
         verbose: Whether to print verbose output
         dry_run: If True, show flake content without building
         mount_points: List of directories to create in image for volume mounts
+
+    Returns:
+        Lock hash string if flake.lock exists, None otherwise
 
     Raises:
         DevboxError: If build fails
@@ -132,13 +182,16 @@ def build_image_with_progress(
         click.secho("Generated files:", fg="cyan")
         click.echo(f"  Directory: {temp_dir}")
         click.echo(f"  Flake:     {flake_path}")
-        return
+        return None
 
     with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as temp_dir:
         click.echo(f"Building image {image_ref}...")
-        build_image(flake_content, image_ref, temp_dir, verbose)
+        lock_hash = build_image(flake_content, image_ref, temp_dir, verbose)
         click.echo()
         click.secho(f"✅ Image built successfully: {image_ref}", fg="green")
+        if lock_hash:
+            click.echo(f"   Lock hash: {lock_hash}")
+        return lock_hash
 
 
 @click.group(invoke_without_command=True)
@@ -633,6 +686,11 @@ def _ensure_image_exists(
 
     labels = get_image_labels(image_ref)
     image_version = labels.get("dev.nixdevbox.version")
+    image_lock_hash = labels.get("dev.nixdevbox.lock_hash")
+
+    local_lock_hash = _get_flake_lock_hash(
+        flake_refs, image_ref, version_info, mount_points
+    )
 
     diffs: list[str] = []
 
@@ -641,11 +699,16 @@ def _ensure_image_exists(
     elif image_version != version_info.version:
         diffs.append(f"version ({image_version} -> {version_info.version})")
 
+    if not image_lock_hash:
+        diffs.append("lock_hash (missing)")
+    elif local_lock_hash and image_lock_hash != local_lock_hash:
+        diffs.append(f"lock_hash ({image_lock_hash} -> {local_lock_hash})")
+
     if diffs:
         click.secho(
             f"⚠️  Image version mismatch detected:\n"
-            f"    - Image built with: nix-devbox v{image_version or 'unknown'}\n"
-            f"    - Current version:   nix-devbox v{version_info.version}\n"
+            f"    - Image built with: nix-devbox v{image_version or 'unknown'}, lock_hash={image_lock_hash or 'unknown'}\n"
+            f"    - Current version:   nix-devbox v{version_info.version}, lock_hash={local_lock_hash or 'unknown'}\n"
             f"    - Differences: {', '.join(diffs)}\n"
             f"\n"
             f"Run with --rebuild to rebuild the image.",
