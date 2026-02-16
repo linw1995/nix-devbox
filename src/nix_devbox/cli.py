@@ -189,8 +189,10 @@ def build_image_with_progress(
         lock_hash = build_image(flake_content, image_ref, temp_dir, verbose)
         click.echo()
         click.secho(f"✅ Image built successfully: {image_ref}", fg="green")
+        commit = version_info.commit_sha or "unknown"
+        click.echo(f"   nix-devbox: {version_info.version} ({commit})")
         if lock_hash:
-            click.echo(f"   Lock hash: {lock_hash}")
+            click.echo(f"   flake lock: {lock_hash}")
         return lock_hash
 
 
