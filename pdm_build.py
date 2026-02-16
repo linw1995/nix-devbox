@@ -7,11 +7,11 @@ from pathlib import Path
 def get_git_info():
     """Get git commit sha and dirty status."""
     try:
-        module_dir = Path(__file__).parent / "src" / "nix_devbox"
+        project_root = Path(__file__).parent
 
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=module_dir,
+            cwd=project_root,
             capture_output=True,
             text=True,
             check=True,
@@ -20,7 +20,7 @@ def get_git_info():
 
         diff_result = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=module_dir,
+            cwd=project_root,
             capture_output=True,
             text=True,
             check=False,
@@ -40,7 +40,8 @@ def pdm_build_initialize(context):
     if not sha or sha == "unknown":
         return
 
-    init_path = Path(__file__).parent / "src" / "nix_devbox" / "__init__.py"
+    project_root = Path(__file__).parent
+    init_path = project_root / "src" / "nix_devbox" / "__init__.py"
     content = init_path.read_text()
 
     new_lines = []
