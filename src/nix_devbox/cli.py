@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import click
 
-from . import __version__ as VERSION
+from . import __commit_sha__, __is_dirty__, __version__ as VERSION
 from .builder import build_image, get_image_labels, image_exists, run_container
 from .config import (
     DEFAULT_REGISTRY,
@@ -194,9 +194,17 @@ def build_image_with_progress(
         return lock_hash
 
 
+def _get_version() -> str:
+    """Get version string with commit info."""
+    commit = __commit_sha__ if __commit_sha__ else "unknown"
+    if __is_dirty__ and __commit_sha__:
+        commit += "+dirty"
+    return f"nix-devbox {VERSION}\ncommit: {commit}"
+
+
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.version_option(version=VERSION, prog_name="nix-devbox")
+@click.version_option(message=_get_version(), prog_name="nix-devbox")
 def cli(ctx: "Context") -> None:
     """
     Nix devbox - Merge multiple flake devShells, build and run Docker containers
