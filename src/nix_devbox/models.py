@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__
+from . import __commit_sha__, __is_dirty__, __version__
 
 DEFAULT_TAG = "latest"
 
@@ -46,26 +46,14 @@ class VersionInfo:
         Returns:
             VersionInfo instance with version and commit
         """
-        commit_sha = _get_git_commit_sha()
+        commit = __commit_sha__
+        if __is_dirty__ and commit != "unknown":
+            commit += "+dirty"
 
         return cls(
             version=__version__,
-            commit_sha=commit_sha,
+            commit_sha=commit,
         )
-
-
-def _get_git_commit_sha() -> str | None:
-    """Get the current git commit SHA if available."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
 
 
 # Known flake URL schemes

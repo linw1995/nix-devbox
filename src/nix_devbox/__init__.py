@@ -1,6 +1,8 @@
 """Nix devbox - Merge flake devShells, build and run containers."""
 
 __version__ = "0.1.0"
+__commit_sha__ = ""
+__is_dirty__ = False
 
 from .config import DevboxConfig, merge_devbox_configs
 from .exceptions import BuildError, ConfigError, DevboxError, DockerError, FlakeError

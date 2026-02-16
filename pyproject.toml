@@ -1,6 +1,6 @@
 [project]
 name = "nix-devbox"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Merge multiple flake devShells, build Docker image, and run containers"
 authors = [{ name = "林玮 (Jade Lin)", email = "linw1995@icloud.com" }]
 dependencies = ["click>=8.0.0", "pyyaml>=6.0"]
@@ -15,11 +15,17 @@ nix-devbox = "nix_devbox.cli:cli"
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/nix_devbox"]
-
 [tool.pdm]
 distribution = true
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages]
+find = {where = ["src"]}
+
+[tool.setuptools.dynamic]
+version = {attr = "nix_devbox.__version__"}
 
 [dependency-groups]
 dev = [

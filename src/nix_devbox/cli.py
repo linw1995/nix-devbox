@@ -686,6 +686,7 @@ def _ensure_image_exists(
 
     labels = get_image_labels(image_ref)
     image_version = labels.get("dev.nixdevbox.version")
+    image_commit = labels.get("dev.nixdevbox.commit")
     image_lock_hash = labels.get("dev.nixdevbox.lock_hash")
 
     local_lock_hash = _get_flake_lock_hash(
@@ -699,6 +700,11 @@ def _ensure_image_exists(
     elif image_version != version_info.version:
         diffs.append(f"version ({image_version} -> {version_info.version})")
 
+    if not image_commit:
+        diffs.append("commit (missing)")
+    elif version_info.commit_sha and image_commit != version_info.commit_sha:
+        diffs.append(f"commit ({image_commit} -> {version_info.commit_sha})")
+
     if not image_lock_hash:
         diffs.append("lock_hash (missing)")
     elif local_lock_hash and image_lock_hash != local_lock_hash:
@@ -707,8 +713,8 @@ def _ensure_image_exists(
     if diffs:
         click.secho(
             f"⚠️  Image version mismatch detected:\n"
-            f"    - Image built with: nix-devbox v{image_version or 'unknown'}, lock_hash={image_lock_hash or 'unknown'}\n"
-            f"    - Current version:   nix-devbox v{version_info.version}, lock_hash={local_lock_hash or 'unknown'}\n"
+            f"    - Image built with: nix-devbox v{image_version or 'unknown'}, commit={image_commit or 'unknown'}, lock_hash={image_lock_hash or 'unknown'}\n"
+            f"    - Current version:   nix-devbox v{version_info.version}, commit={version_info.commit_sha or 'unknown'}, lock_hash={local_lock_hash or 'unknown'}\n"
             f"    - Differences: {', '.join(diffs)}\n"
             f"\n"
             f"Run with --rebuild to rebuild the image.",
