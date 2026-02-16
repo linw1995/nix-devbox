@@ -19,7 +19,7 @@ def get_git_info():
         sha = result.stdout.strip()[:7]
 
         diff_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=project_root,
             capture_output=True,
             text=True,
