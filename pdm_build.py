@@ -33,7 +33,7 @@ def get_git_info():
 
 
 def pdm_build_initialize(context):
-    """Update __init__.py with git info before build."""
+    """Update _version.py with git info before build."""
     sha, is_dirty = get_git_info()
 
     # Only update if we have valid git info
@@ -41,19 +41,6 @@ def pdm_build_initialize(context):
         return
 
     project_root = Path(__file__).parent
-    init_path = project_root / "src" / "nix_devbox" / "__init__.py"
-    content = init_path.read_text()
-
-    new_lines = []
-    for line in content.splitlines():
-        if line.startswith("__version__"):
-            new_lines.append('__version__ = "0.1.0"')
-        elif line.startswith("__commit_sha__"):
-            new_lines.append(f'__commit_sha__ = "{sha}"')
-        elif line.startswith("__is_dirty__"):
-            new_lines.append(f"__is_dirty__ = {is_dirty}")
-        else:
-            new_lines.append(line)
-
-    init_path.write_text("\n".join(new_lines) + "\n")
+    version_path = project_root / "src" / "nix_devbox" / "_version.py"
+    version_path.write_text(f'__commit_sha__ = "{sha}"\n__is_dirty__ = {is_dirty}\n')
     print(f"Updated: sha={sha}, dirty={is_dirty}")

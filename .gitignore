@@ -34,3 +34,4 @@ __pycache__/
 .agents/
 __pypackages__/
 .coverage
+src/nix_devbox/_version.py
