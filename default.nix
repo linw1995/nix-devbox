@@ -18,6 +18,7 @@ in {
           (lib.hasSuffix ".nix" name)
           (lib.hasPrefix "." (builtins.baseNameOf name))
           (lib.hasSuffix "flake.lock" name)
+          (name == "pdm.lock")
         ]);
     };
   };
