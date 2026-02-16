@@ -328,6 +328,115 @@ def _expand_extends(
     return tuple(resolved_extends) + flakes
 
 
+def _compute_flake_lock_hash(flake_dir: Path) -> str | None:
+    """Compute MD5 hash of flake.lock file.
+
+    Args:
+        flake_dir: Directory containing flake.nix
+
+    Returns:
+        MD5 hash string, or None if lock file doesn't exist or fails
+    """
+    try:
+        subprocess.run(
+            ["nix", "flake", "metadata", str(flake_dir)],
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    lock_path = flake_dir / "flake.lock"
+    if not lock_path.exists():
+        return None
+    md5 = hashlib.md5()
+    md5.update(lock_path.read_bytes())
+    return md5.hexdigest()
+
+
+def _execute_update(flakes: tuple[str, ...], verbose: bool) -> None:
+    """Execute flake update for the given flake references."""
+    devbox_config = find_config_in_directory(Path.cwd())
+    flakes = _expand_extends(flakes, devbox_config)
+    flake_refs = _resolve_flake_refs(flakes, devbox_config)
+
+    version_info = VersionInfo.create(flake_refs)
+    devbox_config = _load_devbox_config(flake_refs, devbox_config)
+
+    mount_points: list[str] = []
+    if devbox_config:
+        for vol in devbox_config.run.volumes:
+            parts = vol.split(":")
+            if len(parts) >= 2:
+                mount_points.append(parts[1])
+        mount_points.extend(devbox_config.init.ensure_dirs)
+
+    flake_content = generate_flake(
+        flake_refs,
+        ImageRef.parse("update-dev:latest"),
+        version_info,
+        mount_points if mount_points else None,
+    )
+
+    temp_dir = tempfile.mkdtemp(prefix=TEMP_DIR_PREFIX)
+    flake_path = Path(temp_dir) / "flake.nix"
+    flake_path.write_text(flake_content)
+
+    click.echo(f"Generated flake in: {temp_dir}")
+
+    # Get lock hash before update
+    old_hash = _compute_flake_lock_hash(Path(temp_dir))
+    click.echo(f"flake.lock before update: {old_hash or '(none)'}")
+
+    click.echo("Updating flake inputs...")
+    try:
+        result = subprocess.run(
+            ["nix", "flake", "update", "--flake", temp_dir],
+            capture_output=not verbose,
+            text=True,
+            check=True,
+        )
+        if verbose:
+            click.echo(result.stdout)
+    except subprocess.CalledProcessError as e:
+        raise DevboxError(f"Failed to update flake: {e.stderr}") from e
+
+    # Get lock hash after update
+    new_hash = _compute_flake_lock_hash(Path(temp_dir))
+    click.echo(f"flake.lock after update:  {new_hash or '(none)'}")
+
+    if old_hash != new_hash:
+        click.secho("✅ Flake inputs updated!", fg="green")
+    else:
+        click.secho("✅ Flake inputs are already up to date", fg="green")
+
+
+@cli.command()
+@click.argument("flakes", nargs=-1, required=False)
+@click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
+@click.pass_context
+def update(ctx: "Context", flakes: tuple[str, ...], verbose: bool) -> None:
+    """Update flake inputs to the latest versions.
+
+    \b
+    Usage:
+        nix-devbox update                  # Update current directory's flake
+        nix-devbox update /path/to/flake  # Update specific flake
+        nix-devbox update github:owner/repo  # Update remote flake
+
+    \b
+    This command generates a merged flake and runs 'nix flake update'
+    in the generated flake directory.
+    """
+    if not flakes:
+        flakes = (".",)
+
+    try:
+        _execute_update(flakes, verbose)
+    except DevboxError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _execute_build(
     flakes: tuple[str, ...],
     output: str,
